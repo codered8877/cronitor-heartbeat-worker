@@ -1,11 +1,13 @@
 {
   "name": "cronitor-heartbeat-worker",
   "version": "1.0.0",
+  "description": "Cronitor heartbeat pinger (Render web service)",
   "type": "module",
+  "engines": { "node": ">=18" },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "node-fetch": "^3.3.2"
+    "express": "^4.19.2"
   }
 }
