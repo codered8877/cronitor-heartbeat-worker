@@ -10,6 +10,27 @@ const {
   PORT = '10000',             // Render sets PORT; default for local
 } = process.env;
 
+// ===== Zapier Integration =====
+const { ZAP_B_URL, ZAP_API_KEY } = process.env;
+
+async function sendToZapier(payload) {
+  if (!ZAP_B_URL) return; // If no Zap configured, skip silently
+
+  try {
+    await fetch(ZAP_B_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ZAP_API_KEY || "", // Must match Zapier header
+      },
+      body: JSON.stringify(payload),
+    });
+    console.log("✅ Sent DOM payload to Zapier");
+  } catch (err) {
+    console.error("❌ Zapier POST failed:", err.message);
+  }
+}
+
 if (!CRONITOR_URL) {
   console.error('Missing CRONITOR_URL env var');
   process.exit(1);
@@ -108,6 +129,15 @@ async function pollDomOnce() {
       source: 'coinbase-exchange-public', // for clarity in logs
     };
 
+    // Send clean DOM payload to Zapier
+sendToZapier({
+  type: "dom_update",
+  price: payload.btc_dom_top_price,
+  bids: payload.btc_dom_top_bid_qty,
+  asks: payload.btc_dom_top_ask_qty,
+  ts: payload.ts_iso,
+});
+    
     // Log a compact line you can tail in Render Logs
     console.log(
       'DOM',
