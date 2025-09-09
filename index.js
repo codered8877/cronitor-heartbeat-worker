@@ -1,42 +1,67 @@
-// index.js (ESM)
+// index.js (ESM, no Zapier)
 
+// ---------- Imports ----------
 import express from "express";
+import fetch from "node-fetch";
 import WebSocket from "ws";
 
 // ---------- ENV ----------
 const {
-  PRODUCT_ID = "BTC-USD",
-  DOM_POLL_MS = "6000",
+  PRODUCT_ID = "BTC-USD",         // e.g., BTC-USD, ETH-USD
+  DOM_POLL_MS = "6000",           // min 2000ms
   CVD_EMA_LEN = "34",
-  ZAP_B_URL = "",
-  ZAP_API_KEY = "",
-  CRONITOR_URL = "",
+  WEBHOOK_API_KEY = "",           // optional: protect /tv endpoint (x-api-key header)
+  CRONITOR_URL = "",              // optional: keep-alive ping
   PORT = "3000",
 } = process.env;
 
 const domPollMs = Math.max(2000, parseInt(DOM_POLL_MS, 10) || 6000);
 const cvdEmaLen = Math.max(2, parseInt(CVD_EMA_LEN, 10) || 34);
 
-// ---------- EXPRESS (keep-alive http for Render) ----------
+// ---------- State ----------
+let lastDom = null;               // last DOM snapshot
+let lastPayload = null;           // last merged DOM+CVD payload
+let lastTvAlert = null;           // last TradingView webhook body
+
+// ---------- EXPRESS ----------
 const app = express();
 app.use(express.json());
 
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-// Optional: accept DOM posts (not required when we self-poll)
+app.get("/status", (_req, res) => {
+  const out = lastPayload ?? {
+    product: PRODUCT_ID,
+    note: "No payload yet; waiting for first DOM poll.",
+  };
+  res.json(out);
+});
+
+// Optional: accept external DOM posts (not required — we self-poll)
 app.post("/dom", (req, res) => {
-  if (ZAP_API_KEY && req.headers["x-api-key"] !== ZAP_API_KEY) {
+  console.log("DOM payload (external):", req.body);
+  lastDom = { ...(req.body || {}), ts_recv: new Date().toISOString() };
+  res.json({ status: "ok" });
+});
+
+// NEW: TradingView → Render webhook
+// Set WEBHOOK_API_KEY in Render and send it as header:  x-api-key: <key>
+app.post("/tv", (req, res) => {
+  if (WEBHOOK_API_KEY && req.headers["x-api-key"] !== WEBHOOK_API_KEY) {
     return res.status(401).json({ error: "unauthorized" });
   }
-  console.log("DOM payload (external):", req.body);
-  return res.json({ status: "ok" });
+  lastTvAlert = { body: req.body, ts: new Date().toISOString() };
+  console.log("📨 TV alert:", JSON.stringify(lastTvAlert.body));
+  return res.json({ ok: true });
 });
+
+app.get("/tv/last", (_req, res) => res.json(lastTvAlert ?? { note: "No TV alerts yet." }));
 
 app.listen(PORT, () => {
   console.log(`HTTP server listening on ${PORT}`);
 });
 
-// ---------- CRONITOR PINGER (optional/keep) ----------
+// ---------- CRONITOR PINGER (optional) ----------
 async function pingCronitor() {
   if (!CRONITOR_URL) return;
   try {
@@ -48,48 +73,23 @@ async function pingCronitor() {
 }
 setInterval(pingCronitor, 15000);
 
-// ---------- ZAP POST HELPER ----------
-async function postToZap(payload) {
-  if (!ZAP_B_URL) return; // allow running with no Zap during tests
-  try {
-    const r = await fetch(ZAP_B_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ZAP_API_KEY || "",
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      console.error("Zap POST failed:", r.status, t);
-    } else {
-      console.log("✅ Posted to Zap B");
-    }
-  } catch (e) {
-    console.error("Zap POST error:", e.message);
-  }
-}
-
 // ---------- DOM (REST L2 snapshot) ----------
 async function fetchDOM() {
   try {
-    // Coinbase Exchange public REST (level 2)
     const url = `https://api.exchange.coinbase.com/products/${PRODUCT_ID}/book?level=2`;
     const r = await fetch(url, { headers: { "User-Agent": "render-app" } });
     if (!r.ok) throw new Error(`DOM HTTP ${r.status}`);
     const book = await r.json();
 
-    // Top of book
-    const bestAsk = book.asks && book.asks[0] ? book.asks[0] : null;
-    const bestBid = book.bids && book.bids[0] ? book.bids[0] : null;
+    const bestAsk = book.asks?.[0] ?? null;
+    const bestBid = book.bids?.[0] ?? null;
 
     const p_ask = bestAsk ? parseFloat(bestAsk[0]) : null;
     const q_ask = bestAsk ? parseFloat(bestAsk[1]) : null;
     const p_bid = bestBid ? parseFloat(bestBid[0]) : null;
     const q_bid = bestBid ? parseFloat(bestBid[1]) : null;
 
-    return {
+    lastDom = {
       type: "dom",
       p_ask,
       q_ask,
@@ -98,6 +98,7 @@ async function fetchDOM() {
       sequence: book.sequence ?? null,
       ts: new Date().toISOString(),
     };
+    return lastDom;
   } catch (e) {
     console.error("DOM fetch error:", e.message);
     return null;
@@ -119,33 +120,23 @@ function startCVD() {
 
     ws.on("open", () => {
       console.log("CVD WS open");
-      // subscribe to matches for our product
-      const sub = {
-        type: "subscribe",
-        channels: [{ name: "matches", product_ids: [PRODUCT_ID] }],
-      };
+      const sub = { type: "subscribe", channels: [{ name: "matches", product_ids: [PRODUCT_ID] }] };
       ws.send(JSON.stringify(sub));
-      // simple heartbeat
       clearInterval(wsHeartbeat);
       wsHeartbeat = setInterval(() => {
-        try {
-          ws.ping();
-        } catch (_) {}
+        try { ws.ping(); } catch (_) {}
       }, 25000);
     });
 
     ws.on("message", (buf) => {
       try {
         const msg = JSON.parse(buf.toString());
-        // "match" messages carry trade side/size
         if (msg.type === "match" && msg.product_id === PRODUCT_ID) {
           const size = parseFloat(msg.size || "0");
-          const side = msg.side; // "buy" or "sell"
+          const side = msg.side; // "buy" | "sell"
           const signed = side === "buy" ? size : side === "sell" ? -size : 0;
-
           cvd += signed;
-          // EMA of CVD for stability (like your indicator)
-          cvdEma = cvdEma === 0 ? cvd : (alpha * cvd) + (1 - alpha) * cvdEma;
+          cvdEma = cvdEma === 0 ? cvd : alpha * cvd + (1 - alpha) * cvdEma;
         }
       } catch (e) {
         console.error("CVD msg parse error:", e.message);
@@ -168,14 +159,14 @@ function startCVD() {
 }
 startCVD();
 
-// ---------- MAIN LOOP: Merge DOM + CVD and send ----------
+// ---------- MAIN LOOP: Merge DOM + CVD (no outbound posts) ----------
 async function tick() {
   const dom = await fetchDOM();
   if (!dom) return;
 
   const cvdDir = cvd > cvdEma ? "up" : cvd < cvdEma ? "down" : "flat";
 
-  const payload = {
+  lastPayload = {
     source: "render",
     product: PRODUCT_ID,
     ts: dom.ts,
@@ -193,8 +184,7 @@ async function tick() {
     cvd_dir: cvdDir, // "up" | "down" | "flat"
   };
 
-  console.log("Payload →", payload);
-  await postToZap(payload);
+  console.log("Payload →", lastPayload);
 }
 
 setInterval(tick, domPollMs);
