@@ -1,13 +1,15 @@
 {
-  "name": "cronitor-heartbeat-worker",
+  "name": "btc-dom-cvd-service",
   "version": "1.0.0",
+  "description": "BTC DOM + CVD live feed + TradingView webhook",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "main": "index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "ws": "^8.18.0"
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.13.0"
   }
 }
