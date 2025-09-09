@@ -1,151 +1,134 @@
-// index.mjs (ESM)
-// Requires Node 18+ (global fetch), Express 4.x
+// src/index.js  (ESM)
 import express from 'express';
 
-// ---------- Env ----------
-const CRONITOR_URL = process.env.CRONITOR_URL || null;
-const ZAP_B_URL    = process.env.ZAP_B_URL || null;
-const ZAP_API_KEY  = process.env.ZAP_API_KEY || null;
+// ====== ENV ======
+const {
+  CRONITOR_URL,               // required (your existing heartbeat URL)
+  ZAP_API_KEY,                // optional: header auth for /dom
+  PRODUCT_ID = 'BTC-USD',     // which market to poll
+  POLL_MS = '15000',          // poll interval in ms (string env -> number below)
+  PORT = '10000',             // Render sets PORT; default for local
+} = process.env;
 
-const DOM_PRODUCT  = process.env.DOM_PRODUCT || 'BTC-USD';
-const DOM_LEVEL    = process.env.DOM_LEVEL || '2';        // 1,2,3 supported by Coinbase
-const DOM_POLL_MS  = Number(process.env.DOM_POLL_MS || 15000);
+if (!CRONITOR_URL) {
+  console.error('Missing CRONITOR_URL env var');
+  process.exit(1);
+}
 
-// ---------- Web server (Render needs an HTTP service) ----------
+const pollMs = Number(POLL_MS) || 15000;
+
+// ====== APP (tiny HTTP server so Render sees a web service) ======
 const app = express();
 app.use(express.json());
 
-// Health check (keep-alive / uptime pingers)
+// Health check that Render calls
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
-// Optional: existing DOM ingest (kept)
+// (Optional) Keep the /dom endpoint for backwards compatibility / testing
 app.post('/dom', (req, res) => {
   if (ZAP_API_KEY && req.headers['x-api-key'] !== ZAP_API_KEY) {
     return res.status(401).json({ error: 'unauthorized' });
   }
-  console.log('DOM payload (POST /dom):', req.body);
+  console.log('DOM payload (from webhook):', JSON.stringify(req.body));
   return res.status(200).json({ status: 'ok' });
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`HTTP server listening on ${port}`));
+app.listen(Number(PORT), () => {
+  console.log(`HTTP server listening on ${PORT}`);
+});
 
-// ---------- Cronitor heartbeat (optional, if you configured CRONITOR_URL) ----------
-async function pingCronitor() {
-  if (!CRONITOR_URL) return;
+// ====== Cronitor pinger (unchanged) ======
+async function pingOnce() {
   try {
     const r = await fetch(CRONITOR_URL, { method: 'GET' });
-    if (!r.ok) console.error('Cronitor ping failed', r.status);
-    else console.log('Cronitor ping ok', new Date().toISOString());
+    if (!r.ok) console.error('Ping failed', r.status);
+    else console.log('Ping ok', new Date().toISOString());
   } catch (e) {
-    console.error('Cronitor ping error:', e.message);
+    console.error('Ping error', e.message);
   }
 }
-// keep your existing cadence; or call inside the same 15s loop if you like
-if (CRONITOR_URL) setInterval(pingCronitor, 60_000);
+setInterval(pingOnce, 15000);
 
-// ---------- Coinbase REST poller ----------
-const coinbaseRestBase = 'https://api.exchange.coinbase.com'; // public, free
+// ====== Coinbase DOM poll (public endpoint; no API key needed) ======
+// Docs: https://api.exchange.coinbase.com/products/<product_id>/book?level=1
+// Returns top-of-book (best bid/ask) with price and size.
+const CB_EX_BASE = 'https://api.exchange.coinbase.com';
 
-async function fetchOrderBook(product = DOM_PRODUCT, level = DOM_LEVEL) {
-  const url = `${coinbaseRestBase}/products/${encodeURIComponent(product)}/book?level=${encodeURIComponent(level)}`;
-  const r = await fetch(url, {
-    method: 'GET',
-    headers: {
-      // Public data; UA header helps avoid some anti-bot edges
-      'User-Agent': 'render-dom-poller/1.0',
-      'Accept': 'application/json'
-    },
-  });
-  if (!r.ok) throw new Error(`Coinbase ${r.status}`);
-  return r.json();
-}
+async function pollDomOnce() {
+  const url = `${CB_EX_BASE}/products/${encodeURIComponent(
+    PRODUCT_ID
+  )}/book?level=1`;
 
-// Transform Coinbase book → small, typed payload
-function toTopOfBookPayload(bookJson) {
-  // Coinbase returns arrays of strings:
-  // bids: [[price, size, num-orders], ...]
-  // asks: [[price, size, num-orders], ...]
-  const bestBid = (bookJson?.bids?.[0]) || null;
-  const bestAsk = (bookJson?.asks?.[0]) || null;
-
-  const [bidPriceStr, bidQtyStr, bidOrdersStr] = bestBid || [null, null, null];
-  const [askPriceStr, askQtyStr, askOrdersStr] = bestAsk || [null, null, null];
-
-  const bidPrice  = bidPriceStr ? Number(bidPriceStr) : null;
-  const askPrice  = askPriceStr ? Number(askPriceStr) : null;
-  const bidQty    = bidQtyStr ? Number(bidQtyStr) : null;
-  const askQty    = askQtyStr ? Number(askQtyStr) : null;
-  const bidOrders = bidOrdersStr ? Number(bidOrdersStr) : null;
-  const askOrders = askOrdersStr ? Number(askOrdersStr) : null;
-
-  const mid = (bidPrice && askPrice) ? (bidPrice + askPrice) / 2 : null;
-  const spread = (bidPrice && askPrice) ? (askPrice - bidPrice) : null;
-
-  return {
-    // naming consistent with your Zap B fields
-    symbol: DOM_PRODUCT,
-    level: Number(DOM_LEVEL),
-    ts_iso: new Date().toISOString(),
-    sequence: bookJson?.sequence ?? null,
-
-    btc_dom_top_bid_price: bidPrice,
-    btc_dom_top_bid_qty: bidQty,
-    btc_dom_top_bid_orders: bidOrders,
-
-    btc_dom_top_ask_price: askPrice,
-    btc_dom_top_ask_qty: askQty,
-    btc_dom_top_ask_orders: askOrders,
-
-    btc_dom_mid: mid,
-    btc_dom_spread: spread,
-
-    source: 'coinbase_rest',
-  };
-}
-
-// ---------- Forward to Zap B (optional) ----------
-async function postToZapB(payload) {
-  if (!ZAP_B_URL) {
-    console.log('ZAP_B_URL not set; skipping forward. Payload:', payload);
-    return;
-  }
-  const headers = { 'Content-Type': 'application/json' };
-  if (ZAP_API_KEY) headers['x-api-key'] = ZAP_API_KEY;
-
-  const r = await fetch(ZAP_B_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) {
-    const txt = await r.text().catch(() => '');
-    throw new Error(`Zap B POST failed ${r.status}: ${txt.slice(0, 200)}`);
-  }
-}
-
-// ---------- Main 15s loop with gentle backoff ----------
-let timer = null;
-let backoffMs = DOM_POLL_MS;
-
-async function pollOnce() {
   try {
-    const book = await fetchOrderBook();
-    const payload = toTopOfBookPayload(book);
-    console.log('Top-of-book:', payload);
+    const r = await fetch(url, {
+      // public market data; just set JSON & a UA
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'render-btc-dom/1.0',
+      },
+      method: 'GET',
+    });
 
-    await postToZapB(payload);   // remove/keep depending on your pipeline
-    backoffMs = DOM_POLL_MS;     // reset backoff on success
-  } catch (err) {
-    console.error('poll error:', err.message || err);
-    // exponential-ish backoff: cap at 60s
-    backoffMs = Math.min(backoffMs * 1.5, 60_000);
-  } finally {
-    // jitter ±10% to avoid thundering herd
-    const jitter = Math.round(backoffMs * (0.9 + Math.random() * 0.2));
-    timer = setTimeout(pollOnce, jitter);
+    if (!r.ok) {
+      // 429/5xx etc. — log and bail; next tick will retry
+      console.error('poll error:', PRODUCT_ID, r.status);
+      return;
+    }
+
+    const data = await r.json();
+
+    // Expected shape:
+    // { bids: [ [price, size, numOrders], ... ],
+    //   asks: [ [price, size, numOrders], ... ] }
+    const topBid = Array.isArray(data.bids) && data.bids[0] ? data.bids[0] : null;
+    const topAsk = Array.isArray(data.asks) && data.asks[0] ? data.asks[0] : null;
+
+    if (!topBid || !topAsk) {
+      console.error('poll error: empty book for', PRODUCT_ID);
+      return;
+    }
+
+    // Parse to numbers
+    const [bidPriceStr, bidQtyStr, bidOrdersStr] = topBid;
+    const [askPriceStr, askQtyStr, askOrdersStr] = topAsk;
+
+    const payload = {
+      // Keep field names consistent with your Zapier step
+      btc_dom_top_price: Number(askPriceStr),        // you were mapping this as "Top Ask Price"
+      btc_dom_top_ask_qty: Number(askQtyStr),
+      btc_dom_top_bid_price: Number(bidPriceStr),
+      btc_dom_top_bid_qty: Number(bidQtyStr),
+      btc_dom_top_ask_orders: Number(askOrdersStr ?? 1),
+      btc_dom_top_bid_orders: Number(bidOrdersStr ?? 1),
+
+      ts_iso: new Date().toISOString(),
+      sequence: Date.now(),          // no seq on this endpoint; use ms timestamp
+      auction_mode: false,
+      product_id: PRODUCT_ID,
+      source: 'coinbase-exchange-public', // for clarity in logs
+    };
+
+    // Log a compact line you can tail in Render Logs
+    console.log(
+      'DOM',
+      JSON.stringify({
+        p_ask: payload.btc_dom_top_price,
+        q_ask: payload.btc_dom_top_ask_qty,
+        p_bid: payload.btc_dom_top_bid_price,
+        q_bid: payload.btc_dom_top_bid_qty,
+        t: payload.ts_iso,
+      })
+    );
+
+    // If you later want to forward this internally, do it here
+    // e.g., POST to another route, push to a DB/queue, etc.
+
+  } catch (e) {
+    console.error('poll error:', e.message);
   }
 }
 
-// start
-pollOnce();
+// Start polling loop
+setInterval(pollDomOnce, pollMs);
+// Kick off immediately on boot
+pollDomOnce();
