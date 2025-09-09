@@ -1,67 +1,109 @@
-// index.js (ESM, no Zapier)
+// index.js — Full pipeline: DOM poller + CVD WS + /aplus webhook + (optional) Zap relay
+// ESM compatible (Render Node 18+)
 
-// ---------- Imports ----------
 import express from "express";
 import fetch from "node-fetch";
 import WebSocket from "ws";
 
-// ---------- ENV ----------
+// ------------------------ ENV ------------------------
 const {
-  PRODUCT_ID = "BTC-USD",         // e.g., BTC-USD, ETH-USD
-  DOM_POLL_MS = "6000",           // min 2000ms
-  CVD_EMA_LEN = "34",
-  WEBHOOK_API_KEY = "",           // optional: protect /tv endpoint (x-api-key header)
-  CRONITOR_URL = "",              // optional: keep-alive ping
+  // Core
+  PRODUCT_ID = "BTC-USD",
+
+  // Poll/EMA tuning
+  DOM_POLL_MS = "6000",       // min 2000ms enforced below
+  CVD_EMA_LEN = "34",         // EMA length for CVD smoothing
+
+  // Optional: TradingView webhook shared secret (header)
+  TV_API_KEY = "",            // if set, require: 'x-tv-key' header to match
+
+  // Optional: relay to Zapier (kept, but harmless if empty)
+  ZAP_B_URL = "",             // Zapier step URL (optional)
+  ZAP_API_KEY = "",           // if used, sent as 'x-api-key' (optional)
+
+  // Optional: external DOM post target (legacy compat)
+  ZAP_DOM_URL = "",           // optional: where to POST DOM snapshots
+  ZAP_DOM_API_KEY = "",       // optional header for DOM posts
+
+  // Keep-alive pinger (optional)
+  CRONITOR_URL = "",
+
+  // Server
   PORT = "3000",
 } = process.env;
 
 const domPollMs = Math.max(2000, parseInt(DOM_POLL_MS, 10) || 6000);
 const cvdEmaLen = Math.max(2, parseInt(CVD_EMA_LEN, 10) || 34);
+const alpha = 2 / (cvdEmaLen + 1);
 
-// ---------- State ----------
-let lastDom = null;               // last DOM snapshot
-let lastPayload = null;           // last merged DOM+CVD payload
-let lastTvAlert = null;           // last TradingView webhook body
-
-// ---------- EXPRESS ----------
+// --------------------- EXPRESS APP -------------------
 const app = express();
-app.use(express.json());
+
+// Accept JSON or plain text (TradingView mobile often sends text/plain)
+app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
+app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-app.get("/status", (_req, res) => {
-  const out = lastPayload ?? {
-    product: PRODUCT_ID,
-    note: "No payload yet; waiting for first DOM poll.",
-  };
-  res.json(out);
-});
-
-// Optional: accept external DOM posts (not required — we self-poll)
+// (Legacy helper) accept external DOM if ever used
 app.post("/dom", (req, res) => {
-  console.log("DOM payload (external):", req.body);
-  lastDom = { ...(req.body || {}), ts_recv: new Date().toISOString() };
-  res.json({ status: "ok" });
-});
-
-// NEW: TradingView → Render webhook
-// Set WEBHOOK_API_KEY in Render and send it as header:  x-api-key: <key>
-app.post("/tv", (req, res) => {
-  if (WEBHOOK_API_KEY && req.headers["x-api-key"] !== WEBHOOK_API_KEY) {
+  if (ZAP_API_KEY && req.headers["x-api-key"] !== ZAP_API_KEY) {
     return res.status(401).json({ error: "unauthorized" });
   }
-  lastTvAlert = { body: req.body, ts: new Date().toISOString() };
-  console.log("📨 TV alert:", JSON.stringify(lastTvAlert.body));
+  console.log("DOM payload (external):", req.body);
+  return res.json({ status: "ok" });
+});
+
+// ------------- TradingView A+ webhook (/aplus) -------------
+app.post("/aplus", (req, res) => {
+  // optional shared-secret guard
+  if (TV_API_KEY && req.headers["x-tv-key"] !== TV_API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  // TV can post JSON or just a string (esp. when message is empty on mobile)
+  let raw = req.body;
+  let parsed = null;
+
+  if (typeof raw === "string") {
+    // Sometimes empty or a generic text — try to parse JSON if it looks like it
+    const maybeJson = raw.trim().startsWith("{") && raw.trim().endsWith("}");
+    if (maybeJson) {
+      try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    }
+  } else if (raw && typeof raw === "object") {
+    parsed = raw;
+  }
+
+  // Normalize a record for logs
+  const record = {
+    received_at: new Date().toISOString(),
+    kind: "aplus",
+    product: PRODUCT_ID,
+    payload_type: parsed ? "json" : (typeof raw),
+    payload: parsed || raw || null,
+  };
+
+  // Soft schema detect (works with our compact Pine payloads)
+  // Expected keys if compact: { type:"APlus", s, t, f, p, d, e, sc, sr, R }
+  if (parsed && parsed.type === "APlus") {
+    console.log("📥 APlus JSON:", record);
+  } else {
+    console.log("📥 APlus (raw/unknown):", record);
+  }
+
+  // (Optional) relay the A+ to a Zap if env present
+  postToZapSafe(parsed || raw, "aplus");
+
   return res.json({ ok: true });
 });
 
-app.get("/tv/last", (_req, res) => res.json(lastTvAlert ?? { note: "No TV alerts yet." }));
-
+// Start server
 app.listen(PORT, () => {
   console.log(`HTTP server listening on ${PORT}`);
 });
 
-// ---------- CRONITOR PINGER (optional) ----------
+// --------------- CRONITOR KEEP-ALIVE ----------------
 async function pingCronitor() {
   if (!CRONITOR_URL) return;
   try {
@@ -73,7 +115,31 @@ async function pingCronitor() {
 }
 setInterval(pingCronitor, 15000);
 
-// ---------- DOM (REST L2 snapshot) ----------
+// --------------- OPTIONAL ZAP RELAY -----------------
+async function postToZapSafe(payload, tag = "event") {
+  if (!ZAP_B_URL) return; // harmless if unset
+  try {
+    const r = await fetch(ZAP_B_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(ZAP_API_KEY ? { "x-api-key": ZAP_API_KEY } : {}),
+        "x-pipe-tag": tag,
+      },
+      body: JSON.stringify({ tag, product: PRODUCT_ID, payload, ts: new Date().toISOString() }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      console.error("Zap POST failed:", r.status, t);
+    } else {
+      console.log(`✅ Relayed to Zap (${tag})`);
+    }
+  } catch (e) {
+    console.error("Zap POST error:", e.message);
+  }
+}
+
+// -------------------- DOM POLLER --------------------
 async function fetchDOM() {
   try {
     const url = `https://api.exchange.coinbase.com/products/${PRODUCT_ID}/book?level=2`;
@@ -81,36 +147,58 @@ async function fetchDOM() {
     if (!r.ok) throw new Error(`DOM HTTP ${r.status}`);
     const book = await r.json();
 
-    const bestAsk = book.asks?.[0] ?? null;
-    const bestBid = book.bids?.[0] ?? null;
+    const bestAsk = book.asks && book.asks[0] ? book.asks[0] : null;
+    const bestBid = book.bids && book.bids[0] ? book.bids[0] : null;
 
     const p_ask = bestAsk ? parseFloat(bestAsk[0]) : null;
     const q_ask = bestAsk ? parseFloat(bestAsk[1]) : null;
     const p_bid = bestBid ? parseFloat(bestBid[0]) : null;
     const q_bid = bestBid ? parseFloat(bestBid[1]) : null;
 
-    lastDom = {
+    return {
       type: "dom",
-      p_ask,
-      q_ask,
-      p_bid,
-      q_bid,
+      p_ask, q_ask, p_bid, q_bid,
       sequence: book.sequence ?? null,
       ts: new Date().toISOString(),
     };
-    return lastDom;
   } catch (e) {
     console.error("DOM fetch error:", e.message);
     return null;
   }
 }
 
-// ---------- CVD (WebSocket matches channel) ----------
+async function domTick() {
+  const dom = await fetchDOM();
+  if (!dom) return;
+  console.log("DOM →", dom);
+
+  // (Optional) fan out DOM to a URL if provided
+  if (ZAP_DOM_URL) {
+    try {
+      const r = await fetch(ZAP_DOM_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(ZAP_DOM_API_KEY ? { "x-api-key": ZAP_DOM_API_KEY } : {}),
+        },
+        body: JSON.stringify(dom),
+      });
+      if (!r.ok) {
+        console.error("DOM POST failed:", r.status);
+      }
+    } catch (e) {
+      console.error("DOM POST error:", e.message);
+    }
+  }
+}
+setInterval(domTick, domPollMs);
+console.log(`Started DOM poll @ ${domPollMs}ms`);
+
+// ------------------- CVD WEBSOCKET ------------------
 let ws = null;
 let wsHeartbeat = null;
-let cvd = 0; // session cumulative delta volume
+let cvd = 0;     // session cumulative delta volume
 let cvdEma = 0;
-const alpha = 2 / (cvdEmaLen + 1);
 
 function startCVD() {
   const endpoint = "wss://ws-feed.exchange.coinbase.com";
@@ -120,7 +208,10 @@ function startCVD() {
 
     ws.on("open", () => {
       console.log("CVD WS open");
-      const sub = { type: "subscribe", channels: [{ name: "matches", product_ids: [PRODUCT_ID] }] };
+      const sub = {
+        type: "subscribe",
+        channels: [{ name: "matches", product_ids: [PRODUCT_ID] }],
+      };
       ws.send(JSON.stringify(sub));
       clearInterval(wsHeartbeat);
       wsHeartbeat = setInterval(() => {
@@ -133,8 +224,9 @@ function startCVD() {
         const msg = JSON.parse(buf.toString());
         if (msg.type === "match" && msg.product_id === PRODUCT_ID) {
           const size = parseFloat(msg.size || "0");
-          const side = msg.side; // "buy" | "sell"
+          const side = msg.side; // "buy" or "sell"
           const signed = side === "buy" ? size : side === "sell" ? -size : 0;
+
           cvd += signed;
           cvdEma = cvdEma === 0 ? cvd : alpha * cvd + (1 - alpha) * cvdEma;
         }
@@ -159,33 +251,14 @@ function startCVD() {
 }
 startCVD();
 
-// ---------- MAIN LOOP: Merge DOM + CVD (no outbound posts) ----------
-async function tick() {
-  const dom = await fetchDOM();
-  if (!dom) return;
-
-  const cvdDir = cvd > cvdEma ? "up" : cvd < cvdEma ? "down" : "flat";
-
-  lastPayload = {
-    source: "render",
-    product: PRODUCT_ID,
-    ts: dom.ts,
-
-    // DOM
-    p_ask: dom.p_ask,
-    q_ask: dom.q_ask,
-    p_bid: dom.p_bid,
-    q_bid: dom.q_bid,
-    sequence: dom.sequence,
-
-    // CVD
+setInterval(() => {
+  // lightweight heartbeat log for CVD
+  console.log("CVD →", {
+    type: "cvd",
     cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
     cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
-    cvd_dir: cvdDir, // "up" | "down" | "flat"
-  };
+    ts: new Date().toISOString(),
+  });
+}, 15000);
 
-  console.log("Payload →", lastPayload);
-}
-
-setInterval(tick, domPollMs);
-console.log(`Started DOM poll @ ${domPollMs}ms, CVD EMA len ${cvdEmaLen}`);
+console.log(`CVD EMA len ${cvdEmaLen}`);
