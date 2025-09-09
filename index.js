@@ -1,162 +1,202 @@
-// src/index.js  (ESM)
-import express from 'express';
+// index.js (ESM)
 
-// ====== ENV ======
+import express from "express";
+import fetch from "node-fetch";
+import WebSocket from "ws";
+
+// ---------- ENV ----------
 const {
-  CRONITOR_URL,               // required (your existing heartbeat URL)
-  ZAP_API_KEY,                // optional: header auth for /dom
-  ZAP_B_URL,                  //
-  PRODUCT_ID = 'BTC-USD',     // which market to poll
-  POLL_MS = '15000',          // poll interval in ms (string env -> number below)
-  PORT = '10000',             // Render sets PORT; default for local
+  PRODUCT_ID = "BTC-USD",
+  DOM_POLL_MS = "6000",
+  CVD_EMA_LEN = "34",
+  ZAP_B_URL = "",
+  ZAP_API_KEY = "",
+  CRONITOR_URL = "",
+  PORT = "3000",
 } = process.env;
 
-async function sendToZapier(payload) {
-  if (!ZAP_B_URL) return; // If no Zap configured, skip silently
+const domPollMs = Math.max(2000, parseInt(DOM_POLL_MS, 10) || 6000);
+const cvdEmaLen = Math.max(2, parseInt(CVD_EMA_LEN, 10) || 34);
 
-  try {
-    await fetch(ZAP_B_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ZAP_API_KEY || "", // Must match Zapier header
-      },
-      body: JSON.stringify(payload),
-    });
-    console.log("✅ Sent DOM payload to Zapier");
-  } catch (err) {
-    console.error("❌ Zapier POST failed:", err.message);
-  }
-}
-
-if (!CRONITOR_URL) {
-  console.error('Missing CRONITOR_URL env var');
-  process.exit(1);
-}
-
-const pollMs = Number(POLL_MS) || 15000;
-
-// ====== APP (tiny HTTP server so Render sees a web service) ======
+// ---------- EXPRESS (keep-alive http for Render) ----------
 const app = express();
 app.use(express.json());
 
-// Health check that Render calls
-app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-// (Optional) Keep the /dom endpoint for backwards compatibility / testing
-app.post('/dom', (req, res) => {
-  if (ZAP_API_KEY && req.headers['x-api-key'] !== ZAP_API_KEY) {
-    return res.status(401).json({ error: 'unauthorized' });
+// Optional: accept DOM posts (not required when we self-poll)
+app.post("/dom", (req, res) => {
+  if (ZAP_API_KEY && req.headers["x-api-key"] !== ZAP_API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
   }
-  console.log('DOM payload (from webhook):', JSON.stringify(req.body));
-  return res.status(200).json({ status: 'ok' });
+  console.log("DOM payload (external):", req.body);
+  return res.json({ status: "ok" });
 });
 
-app.listen(Number(PORT), () => {
+app.listen(PORT, () => {
   console.log(`HTTP server listening on ${PORT}`);
 });
 
-// ====== Cronitor pinger (unchanged) ======
-async function pingOnce() {
+// ---------- CRONITOR PINGER (optional/keep) ----------
+async function pingCronitor() {
+  if (!CRONITOR_URL) return;
   try {
-    const r = await fetch(CRONITOR_URL, { method: 'GET' });
-    if (!r.ok) console.error('Ping failed', r.status);
-    else console.log('Ping ok', new Date().toISOString());
+    const r = await fetch(CRONITOR_URL, { method: "GET" });
+    if (!r.ok) console.error("Cronitor ping failed:", r.status);
   } catch (e) {
-    console.error('Ping error', e.message);
+    console.error("Cronitor ping error:", e.message);
   }
 }
-setInterval(pingOnce, 15000);
+setInterval(pingCronitor, 15000);
 
-// ====== Coinbase DOM poll (public endpoint; no API key needed) ======
-// Docs: https://api.exchange.coinbase.com/products/<product_id>/book?level=1
-// Returns top-of-book (best bid/ask) with price and size.
-const CB_EX_BASE = 'https://api.exchange.coinbase.com';
-
-async function pollDomOnce() {
-  const url = `${CB_EX_BASE}/products/${encodeURIComponent(
-    PRODUCT_ID
-  )}/book?level=1`;
-
+// ---------- ZAP POST HELPER ----------
+async function postToZap(payload) {
+  if (!ZAP_B_URL) return; // allow running with no Zap during tests
   try {
-    const r = await fetch(url, {
-      // public market data; just set JSON & a UA
+    const r = await fetch(ZAP_B_URL, {
+      method: "POST",
       headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'render-btc-dom/1.0',
+        "Content-Type": "application/json",
+        "x-api-key": ZAP_API_KEY || "",
       },
-      method: 'GET',
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      console.error("Zap POST failed:", r.status, t);
+    } else {
+      console.log("✅ Posted to Zap B");
+    }
+  } catch (e) {
+    console.error("Zap POST error:", e.message);
+  }
+}
+
+// ---------- DOM (REST L2 snapshot) ----------
+async function fetchDOM() {
+  try {
+    // Coinbase Exchange public REST (level 2)
+    const url = `https://api.exchange.coinbase.com/products/${PRODUCT_ID}/book?level=2`;
+    const r = await fetch(url, { headers: { "User-Agent": "render-app" } });
+    if (!r.ok) throw new Error(`DOM HTTP ${r.status}`);
+    const book = await r.json();
+
+    // Top of book
+    const bestAsk = book.asks && book.asks[0] ? book.asks[0] : null;
+    const bestBid = book.bids && book.bids[0] ? book.bids[0] : null;
+
+    const p_ask = bestAsk ? parseFloat(bestAsk[0]) : null;
+    const q_ask = bestAsk ? parseFloat(bestAsk[1]) : null;
+    const p_bid = bestBid ? parseFloat(bestBid[0]) : null;
+    const q_bid = bestBid ? parseFloat(bestBid[1]) : null;
+
+    return {
+      type: "dom",
+      p_ask,
+      q_ask,
+      p_bid,
+      q_bid,
+      sequence: book.sequence ?? null,
+      ts: new Date().toISOString(),
+    };
+  } catch (e) {
+    console.error("DOM fetch error:", e.message);
+    return null;
+  }
+}
+
+// ---------- CVD (WebSocket matches channel) ----------
+let ws = null;
+let wsHeartbeat = null;
+let cvd = 0; // session cumulative delta volume
+let cvdEma = 0;
+const alpha = 2 / (cvdEmaLen + 1);
+
+function startCVD() {
+  const endpoint = "wss://ws-feed.exchange.coinbase.com";
+
+  function connect() {
+    ws = new WebSocket(endpoint);
+
+    ws.on("open", () => {
+      console.log("CVD WS open");
+      // subscribe to matches for our product
+      const sub = {
+        type: "subscribe",
+        channels: [{ name: "matches", product_ids: [PRODUCT_ID] }],
+      };
+      ws.send(JSON.stringify(sub));
+      // simple heartbeat
+      clearInterval(wsHeartbeat);
+      wsHeartbeat = setInterval(() => {
+        try {
+          ws.ping();
+        } catch (_) {}
+      }, 25000);
     });
 
-    if (!r.ok) {
-      // 429/5xx etc. — log and bail; next tick will retry
-      console.error('poll error:', PRODUCT_ID, r.status);
-      return;
-    }
+    ws.on("message", (buf) => {
+      try {
+        const msg = JSON.parse(buf.toString());
+        // "match" messages carry trade side/size
+        if (msg.type === "match" && msg.product_id === PRODUCT_ID) {
+          const size = parseFloat(msg.size || "0");
+          const side = msg.side; // "buy" or "sell"
+          const signed = side === "buy" ? size : side === "sell" ? -size : 0;
 
-    const data = await r.json();
+          cvd += signed;
+          // EMA of CVD for stability (like your indicator)
+          cvdEma = cvdEma === 0 ? cvd : (alpha * cvd) + (1 - alpha) * cvdEma;
+        }
+      } catch (e) {
+        console.error("CVD msg parse error:", e.message);
+      }
+    });
 
-    // Expected shape:
-    // { bids: [ [price, size, numOrders], ... ],
-    //   asks: [ [price, size, numOrders], ... ] }
-    const topBid = Array.isArray(data.bids) && data.bids[0] ? data.bids[0] : null;
-    const topAsk = Array.isArray(data.asks) && data.asks[0] ? data.asks[0] : null;
+    ws.on("close", () => {
+      console.log("CVD WS closed; reconnecting in 3s");
+      clearInterval(wsHeartbeat);
+      setTimeout(connect, 3000);
+    });
 
-    if (!topBid || !topAsk) {
-      console.error('poll error: empty book for', PRODUCT_ID);
-      return;
-    }
-
-    // Parse to numbers
-    const [bidPriceStr, bidQtyStr, bidOrdersStr] = topBid;
-    const [askPriceStr, askQtyStr, askOrdersStr] = topAsk;
-
-    const payload = {
-      // Keep field names consistent with your Zapier step
-      btc_dom_top_price: Number(askPriceStr),        // you were mapping this as "Top Ask Price"
-      btc_dom_top_ask_qty: Number(askQtyStr),
-      btc_dom_top_bid_price: Number(bidPriceStr),
-      btc_dom_top_bid_qty: Number(bidQtyStr),
-      btc_dom_top_ask_orders: Number(askOrdersStr ?? 1),
-      btc_dom_top_bid_orders: Number(bidOrdersStr ?? 1),
-
-      ts_iso: new Date().toISOString(),
-      sequence: Date.now(),          // no seq on this endpoint; use ms timestamp
-      auction_mode: false,
-      product_id: PRODUCT_ID,
-      source: 'coinbase-exchange-public', // for clarity in logs
-    };
-
-    // Send clean DOM payload to Zapier
-sendToZapier({
-  type: "dom_update",
-  price: payload.btc_dom_top_price,
-  bids: payload.btc_dom_top_bid_qty,
-  asks: payload.btc_dom_top_ask_qty,
-  ts: payload.ts_iso,
-});
-    
-    // Log a compact line you can tail in Render Logs
-    console.log(
-      'DOM',
-      JSON.stringify({
-        p_ask: payload.btc_dom_top_price,
-        q_ask: payload.btc_dom_top_ask_qty,
-        p_bid: payload.btc_dom_top_bid_price,
-        q_bid: payload.btc_dom_top_bid_qty,
-        t: payload.ts_iso,
-      })
-    );
-
-    // If you later want to forward this internally, do it here
-    // e.g., POST to another route, push to a DB/queue, etc.
-
-  } catch (e) {
-    console.error('poll error:', e.message);
+    ws.on("error", (err) => {
+      console.error("CVD WS error:", err.message);
+      try { ws.close(); } catch (_) {}
+    });
   }
+
+  connect();
+}
+startCVD();
+
+// ---------- MAIN LOOP: Merge DOM + CVD and send ----------
+async function tick() {
+  const dom = await fetchDOM();
+  if (!dom) return;
+
+  const cvdDir = cvd > cvdEma ? "up" : cvd < cvdEma ? "down" : "flat";
+
+  const payload = {
+    source: "render",
+    product: PRODUCT_ID,
+    ts: dom.ts,
+
+    // DOM
+    p_ask: dom.p_ask,
+    q_ask: dom.q_ask,
+    p_bid: dom.p_bid,
+    q_bid: dom.q_bid,
+    sequence: dom.sequence,
+
+    // CVD
+    cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
+    cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
+    cvd_dir: cvdDir, // "up" | "down" | "flat"
+  };
+
+  console.log("Payload →", payload);
+  await postToZap(payload);
 }
 
-// Start polling loop
-setInterval(pollDomOnce, pollMs);
-// Kick off immediately on boot
-pollDomOnce();
+setInterval(tick, domPollMs);
+console.log(`Started DOM poll @ ${domPollMs}ms, CVD EMA len ${cvdEmaLen}`);
