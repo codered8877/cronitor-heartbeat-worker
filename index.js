@@ -4,8 +4,8 @@ import express from 'express';
 // ====== ENV ======
 const {
   CRONITOR_URL,               // required (your existing heartbeat URL)
-  ZAP_API_KEY, 
-  ZAP_B_URL,// optional: header auth for /dom
+  ZAP_API_KEY,                // optional: header auth for /dom
+  ZAP_B_URL,                  //
   PRODUCT_ID = 'BTC-USD',     // which market to poll
   POLL_MS = '15000',          // poll interval in ms (string env -> number below)
   PORT = '10000',             // Render sets PORT; default for local
