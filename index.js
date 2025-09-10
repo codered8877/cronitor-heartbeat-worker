@@ -283,6 +283,77 @@ app.get("/retention", async (req, res) => {
 });
 
 // ====================================
+// BACKUP (token-protected, gzipped JSON)
+// ====================================
+import zlib from "zlib"; // (top of file you likely already import; if not, keep this here)
+
+const BACKUP_TOKEN = process.env.BACKUP_TOKEN || "";
+
+app.get("/backup", async (req, res) => {
+  try {
+    // Auth (either query token or header)
+    const token = req.query.token || req.get("X-Auth-Token");
+    if (!BACKUP_TOKEN || token !== BACKUP_TOKEN) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    // How many days to include (defaults to 30)
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days || "30", 10)));
+
+    // Time window
+    const since = `NOW() - INTERVAL '${days} days'`;
+
+    // Pull data per table (adjust list to match your schema)
+    // NOTE: trade_feedback kept forever; include all or make it windowed like others
+    const tables = [
+      { name: "aplus_signals",   windowed: true,  ts: "ts" },
+      { name: "aplus_events",    windowed: true,  ts: "ts" },
+      { name: "dom_snapshots",   windowed: true,  ts: "ts" },
+      { name: "cvd_ticks",       windowed: true,  ts: "ts" },
+      { name: "trade_feedback",  windowed: false, ts: "ts" }, // full dump
+    ];
+
+    // Fetch counts first (cheap sanity)
+    const counts = {};
+    for (const t of tables) {
+      const where = t.windowed ? `WHERE ${t.ts} >= ${since}` : "";
+      const { rows } = await pool.query(`SELECT COUNT(*)::int AS c FROM ${t.name} ${where}`);
+      counts[t.name] = rows[0].c;
+    }
+
+    // Pull rows
+    const payload = { meta: {
+        generated_at: new Date().toISOString(),
+        days,
+        counts
+      },
+      data: {}
+    };
+
+    for (const t of tables) {
+      const where = t.windowed ? `WHERE ${t.ts} >= ${since}` : "";
+      // Keep order stable by timestamp if present
+      const order = t.ts ? `ORDER BY ${t.ts} ASC` : "";
+      const { rows } = await pool.query(`SELECT * FROM ${t.name} ${where} ${order}`);
+      payload.data[t.name] = rows;
+    }
+
+    // Gzip + send
+    const raw = Buffer.from(JSON.stringify(payload), "utf8");
+    const gz = zlib.gzipSync(raw);
+
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Content-Disposition",
+      `attachment; filename="backup_${new Date().toISOString().replace(/[:.]/g, "-")}.json.gz"`);
+    res.status(200).send(gz);
+  } catch (err) {
+    console.error("[BACKUP] error:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ====================================
 // RETENTION ENDPOINT (secure)
 // ====================================
 app.post("/internal/retention", async (req, res) => {
