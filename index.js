@@ -213,6 +213,75 @@ const app = express();
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
+// ==============================
+// RETENTION (token-protected)
+// ==============================
+const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
+// call with:  GET /retention?token=YOUR_TOKEN
+// or send header: X-Auth-Token: YOUR_TOKEN
+
+app.get("/retention", async (req, res) => {
+  const token = req.get("X-Auth-Token") || req.query.token || "";
+  if (!RETENTION_TOKEN || token !== RETENTION_TOKEN) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  // hardcoded table names (safe to template)
+  const plan = [
+    { table: "aplus_signals",  interval: "180 days" }, // keep compact A+ signals 6mo
+    { table: "aplus_events",   interval: "30 days"  }, // raw payloads 30d
+    { table: "dom_snapshots",  interval: "14 days"  }, // DOM snapshots 14d
+    { table: "cvd_ticks",      interval: "14 days"  }, // CVD ticks 14d
+    // optional: keep trade feedback forever. uncomment to prune:
+    // { table: "trade_feedback", interval: "180 days" },
+  ];
+
+  const vacuums = [
+    "aplus_signals",
+    "aplus_events",
+    "dom_snapshots",
+    "cvd_ticks",
+    "trade_feedback",
+  ];
+
+  const result = { ok: true, deleted: {}, skipped: [], vacuumed: [] };
+  const client = await pgPool.connect();
+
+  // helper: only delete if table exists
+  async function safeDelete(t, interval) {
+    const exists = await client.query("SELECT to_regclass($1) reg", [t]);
+    if (!exists.rows[0].reg) { result.skipped.push(t); return; }
+    const q = `DELETE FROM ${t} WHERE ts < NOW() - INTERVAL '${interval}'`;
+    const r = await client.query(q);
+    result.deleted[t] = r.rowCount;
+  }
+
+  // helper: only VACUUM if exists
+  async function safeVacuum(t) {
+    const exists = await client.query("SELECT to_regclass($1) reg", [t]);
+    if (!exists.rows[0].reg) return;
+    await client.query(`VACUUM ANALYZE ${t}`);
+    result.vacuumed.push(t);
+  }
+
+  try {
+    await client.query("BEGIN");
+    // deletes
+    for (const { table, interval } of plan) await safeDelete(table, interval);
+    // vacuum (optional but nice)
+    for (const t of vacuums) await safeVacuum(t);
+    await client.query("COMMIT");
+    console.log("[RETENTION] done:", result);
+    return res.json(result);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("[RETENTION] error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // ====================================
 // RETENTION ENDPOINT (secure)
 // ====================================
