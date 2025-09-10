@@ -341,7 +341,6 @@ async function shutdown(sig) {
   }
 }
 ['SIGINT','SIGTERM'].forEach(s => process.on(s, () => shutdown(s)));
-import express from "express";
 import pg from "pg";
 const { Pool } = pg;
 
