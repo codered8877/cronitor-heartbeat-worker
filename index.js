@@ -214,6 +214,59 @@ app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }))
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
 // ====================================
+// RETENTION ENDPOINT (secure)
+// ====================================
+app.post("/internal/retention", async (req, res) => {
+  try {
+    const tokenHeader = req.headers["x-retention-token"];
+    const tokenQuery  = req.query.token;
+    const token = tokenHeader || tokenQuery || "";
+
+    if (process.env.RETENTION_TOKEN && token !== process.env.RETENTION_TOKEN) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    // Prune windows (adjust if you like)
+    const DOM_DAYS  = parseInt(process.env.RETENTION_DOM_DAYS  || "30", 10);   // DOM for 30d
+    const CVD_DAYS  = parseInt(process.env.RETENTION_CVD_DAYS  || "30", 10);   // CVD for 30d
+    const APL_DAYS  = parseInt(process.env.RETENTION_APLUS_DAYS|| "180", 10);  // A+ for 180d
+
+    // Run deletes and capture counts
+    const domDel = await pool.query(
+      "DELETE FROM dom_ticks WHERE ts < NOW() - INTERVAL $1 DAY",
+      [DOM_DAYS]
+    );
+    const cvdDel = await pool.query(
+      "DELETE FROM cvd_ticks WHERE ts < NOW() - INTERVAL $1 DAY",
+      [CVD_DAYS]
+    );
+    const aplDel = await pool.query(
+      "DELETE FROM aplus_events WHERE ts < NOW() - INTERVAL $1 DAY",
+      [APL_DAYS]
+    );
+
+    // Light analyze to keep plans fresh
+    await pool.query("ANALYZE dom_ticks");
+    await pool.query("ANALYZE cvd_ticks");
+    await pool.query("ANALYZE aplus_events");
+
+    const out = {
+      pruned: {
+        dom_ticks: domDel.rowCount || 0,
+        cvd_ticks: cvdDel.rowCount || 0,
+        aplus_events: aplDel.rowCount || 0,
+      },
+      at: new Date().toISOString(),
+    };
+    console.log("[RETENTION]", out);
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    console.error("[RETENTION] error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ====================================
 // KEEP RENDER SERVICE ALWAYS AWAKE
 // ====================================
 const PORT = Number(process.env.PORT || 10000);
