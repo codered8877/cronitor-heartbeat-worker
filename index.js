@@ -2,6 +2,7 @@
 // ESM compatible (Render Node 18+)
 
 import express from "express";
+import fetch from "node-fetch";
 import WebSocket from "ws";
 
 // ------------------------ ENV ------------------------
