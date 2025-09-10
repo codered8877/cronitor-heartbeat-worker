@@ -1,233 +1,267 @@
 // src/index.js
-// Full pipeline: TradingView -> Render (/aplus) -> (Zapier -> ChatGPT)
-// + DOM poller, CVD websocket, Postgres logging, nightly retention
+// Full pipeline: Express + /aplus webhook + Zap relay + Postgres logging
+// + DOM poller + CVD websocket. ESM, Node 18+ (Render compatible).
 
 import express from "express";
 import WebSocket from "ws";
-import { Pool } from "pg";
+import pg from "pg";
 
-// ---------- ENV ----------
+// --------------------------- ENV ---------------------------
 const {
+  // Core
   PRODUCT_ID = "BTC-USD",
 
-  // TradingView shared secret (optional)
-  TV_API_KEY = "", // require header 'x-tv-key' if set
-
-  // Zapier relay (optional)
-  ZAP_B_URL = "",          // Zap trigger/catch URL
-  ZAP_API_KEY = "",        // sent as 'x-api-key' header (Zap should verify)
-
-  // Optional: extra DOM fanout target (legacy)
-  ZAP_DOM_URL = "",
-  ZAP_DOM_API_KEY = "",
-
-  // Coinbase poll + CVD
+  // Poll/EMA tuning
   DOM_POLL_MS = "6000",
   CVD_EMA_LEN = "34",
 
-  // Keep-alive (optional)
+  // Shared secrets (optional)
+  TV_API_KEY = "",          // expect request header: x-tv-key
+  ZAP_API_KEY = "",         // sent to Zap as x-api-key (and used to guard /dom)
+
+  // Zapier (optional)
+  ZAP_B_URL = "",           // your Zap "catch hook" URL
+
+  // Optional fan-out for DOM (legacy)
+  ZAP_DOM_URL = "",
+  ZAP_DOM_API_KEY = "",
+
+  // Postgres
+  POSTGRES_URL = "",
+
+  // Keep-alive
   CRONITOR_URL = "",
 
   // Server
-  PORT = "10000",
-
-  // Postgres (prefer URL, else individual parts)
-  POSTGRES_URL = "",
-  POSTGRES_HOST = "",
-  POSTGRES_PORT = "5432",
-  POSTGRES_DB = "",
-  POSTGRES_USER = "",
-  POSTGRES_PASSWORD = ""
+  PORT = "10000",           // Render Web Service default is fine
 } = process.env;
 
 const domPollMs = Math.max(2000, parseInt(DOM_POLL_MS, 10) || 6000);
 const cvdEmaLen = Math.max(2, parseInt(CVD_EMA_LEN, 10) || 34);
 const alpha = 2 / (cvdEmaLen + 1);
 
-// ---------- DB ----------
-const pool = new Pool(
-  POSTGRES_URL
-    ? { connectionString: POSTGRES_URL, ssl: { rejectUnauthorized: false } }
-    : {
-        host: POSTGRES_HOST,
-        port: Number(POSTGRES_PORT || 5432),
-        database: POSTGRES_DB,
-        user: POSTGRES_USER,
-        password: POSTGRES_PASSWORD,
-        ssl: { rejectUnauthorized: false }
-      }
-);
+// ------------------------ DATABASE -------------------------
+const { Pool } = pg;
+const pool = POSTGRES_URL
+  ? new Pool({
+      connectionString: POSTGRES_URL,
+      ssl: { rejectUnauthorized: false },
+    })
+  : null;
 
-// create tables once
-await pool.query(`
-  create table if not exists aplus_events (
-    id bigserial primary key,
-    ts timestamptz not null default now(),
-    symbol text,
-    dir text,
-    score int,
-    reasons text,
-    raw jsonb
-  );
+async function initDB() {
+  if (!pool) return;
+  await pool.query(`
+    create table if not exists aplus_events (
+      id bigserial primary key,
+      received_at timestamptz not null default now(),
+      product text not null,
+      raw jsonb not null
+    );
+    create table if not exists dom_ticks (
+      id bigserial primary key,
+      ts timestamptz not null,
+      product text not null,
+      p_ask numeric,
+      q_ask numeric,
+      p_bid numeric,
+      q_bid numeric,
+      sequence bigint
+    );
+    create table if not exists cvd_ticks (
+      id bigserial primary key,
+      ts timestamptz not null,
+      product text not null,
+      cvd numeric,
+      cvd_ema numeric
+    );
+    create table if not exists trade_feedback (
+      id bigserial primary key,
+      ts timestamptz not null default now(),
+      product text not null,
+      event_id bigint,
+      label text,         -- 'win' | 'loss' | ...
+      notes text
+    );
+  `);
+  console.log("DB ready");
+}
 
-  create table if not exists dom_ticks (
-    id bigserial primary key,
-    ts timestamptz not null default now(),
-    product text,
-    p_ask numeric,
-    q_ask numeric,
-    p_bid numeric,
-    q_bid numeric,
-    sequence bigint
-  );
-
-  create table if not exists cvd_ticks (
-    id bigserial primary key,
-    ts timestamptz not null default now(),
-    product text,
-    cvd numeric,
-    cvd_ema numeric
-  );
-
-  create table if not exists trade_feedback (
-    id bigserial primary key,
-    ts timestamptz not null default now(),
-    event_id bigint,
-    decision text,   -- 'taken' | 'skipped'
-    outcome text,    -- 'win' | 'loss' | 'be'
-    rr numeric,      -- realized R multiple
-    notes text
-  );
-`);
-
-// Quick test helper to send a sample APlus to Zapier so Zapier can learn the fields.
-// Guard it with ?key=<ZAP_API_KEY>
-app.get("/zap-test", async (req, res) => {
-  if (ZAP_API_KEY && req.query.key !== ZAP_API_KEY) {
-    return res.status(401).json({ error: "unauthorized" });
+async function logAPlus(raw) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `insert into aplus_events (product, raw) values ($1, $2)`,
+      [PRODUCT_ID, raw]
+    );
+  } catch (e) {
+    console.error("DB aplus insert error:", e.message);
   }
-  const sample = {
-    type: "APlus",
-    s: "BTCUSD",
-    t: Date.now(),
-    f: "1",
-    p: 111520.71,
-    d: "LONG",
-    e: "APlus",
-    sc: 60,
-    sr: false,
-    R: "LOCATION|MICRO",
-  };
-  await postToZapSafe(sample, "aplus");
-  return res.json({ ok: true, sent: sample });
-});
+}
 
-// ---------- helpers ----------
+async function logDOM(dom) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `insert into dom_ticks (ts, product, p_ask, q_ask, p_bid, q_bid, sequence)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [dom.ts, PRODUCT_ID, dom.p_ask, dom.q_ask, dom.p_bid, dom.q_bid, dom.sequence ?? null]
+    );
+  } catch (e) {
+    console.error("DB dom insert error:", e.message);
+  }
+}
+
+async function logCVD(state) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `insert into cvd_ticks (ts, product, cvd, cvd_ema)
+       values ($1,$2,$3,$4)`,
+      [state.ts, PRODUCT_ID, state.cvd, state.cvd_ema]
+    );
+  } catch (e) {
+    console.error("DB cvd insert error:", e.message);
+  }
+}
+
+// ----------------------- EXPRESS APP -----------------------
 const app = express();
+
+// Accept JSON or text (TradingView mobile often posts text/plain)
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
-const safeJSON = (maybe) => {
-  if (typeof maybe === "string") {
-    const s = maybe.trim();
-    if (s.startsWith("{") && s.endsWith("}")) {
-      try { return JSON.parse(s); } catch { return null; }
-    }
-    return null;
-  }
-  return (maybe && typeof maybe === "object") ? maybe : null;
-};
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-async function relayToZap(tag, payload) {
-  if (!ZAP_B_URL) return;
+// (Optional) quick Zap test endpoint (for Zapier “Catch Hook” test)
+app.get("/zap-test", async (req, res) => {
   try {
+    if (!ZAP_B_URL) return res.status(400).json({ error: "ZAP_B_URL not set" });
+    const key = req.query.key || req.headers["x-api-key"];
+    if (ZAP_API_KEY && key !== ZAP_API_KEY) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const sample = {
+      tag: "aplus",
+      product: PRODUCT_ID,
+      payload: {
+        type: "APlus",
+        s: PRODUCT_ID.replace("-", ""),
+        t: Date.now(),
+        f: "1",
+        p: 111111.11,
+        d: "LONG",
+        e: "APlus",
+        sc: 60,
+        sr: false,
+        R: "LOCATION|MICRO",
+      },
+      ts: new Date().toISOString(),
+    };
     const r = await fetch(ZAP_B_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(ZAP_API_KEY ? { "x-api-key": ZAP_API_KEY } : {}),
-        "x-pipe-tag": tag
+        "x-pipe-tag": "aplus-test",
       },
-      body: JSON.stringify({
-        tag,
-        product: PRODUCT_ID,
-        payload,
-        ts: new Date().toISOString()
-      })
+      body: JSON.stringify(sample),
     });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      console.error("Zap POST failed:", r.status, t);
-    } else {
-      console.log(`✅ Relayed to Zap (${tag})`);
-    }
+    const text = await r.text();
+    return res.json({ ok: r.ok, status: r.status, body: text.slice(0, 300) });
   } catch (e) {
-    console.error("Zap POST error:", e.message);
+    console.error("zap-test error:", e);
+    return res.status(500).json({ error: e.message });
   }
-}
+});
 
-// ---------- /aplus (single route) ----------
+// (Legacy helper) accept external DOM fan-in (guarded by Zap key if set)
+app.post("/dom", (req, res) => {
+  if (ZAP_API_KEY && req.headers["x-api-key"] !== ZAP_API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  console.log("DOM payload (external):", req.body);
+  return res.json({ status: "ok" });
+});
+
+// -------------------- /aplus WEBHOOK -----------------------
 app.post("/aplus", async (req, res) => {
-  // require TradingView shared secret if configured
+  // Optional TradingView shared-secret guard
   if (TV_API_KEY && req.headers["x-tv-key"] !== TV_API_KEY) {
     return res.status(401).json({ error: "unauthorized" });
   }
 
-  const raw = req.body ?? null;
-  const parsed = safeJSON(raw) || raw; // keep as string if TV sent plain text
+  // TV on mobile may be text/plain. Try to parse if it looks like JSON.
+  let raw = req.body;
+  let parsed = null;
 
-  // Compact MP payload example:
-  // {type:"APlus", s:"BTCUSD", t:..., f:"1", p:..., d:"LONG", e:"APlus", sc:60, sr:false, R:"LOCATION|MICRO"}
-
-  let symbol = null, dir = null, score = null, reasons = null;
-  try {
-    if (parsed && typeof parsed === "object" && parsed.type === "APlus") {
-      symbol = parsed.s || null;
-      dir = parsed.d || null;
-      score = Number.isFinite(+parsed.sc) ? +parsed.sc : null;
-      reasons = parsed.R || null;
-
-      await pool.query(
-        `insert into aplus_events(symbol, dir, score, reasons, raw)
-         values ($1,$2,$3,$4,$5)`,
-        [symbol, dir, score, reasons, parsed]
-      );
-      console.log("📥 APlus JSON saved:", { symbol, dir, score, reasons });
-    } else {
-      await pool.query(
-        `insert into aplus_events(symbol, dir, score, reasons, raw)
-         values ($1,$2,$3,$4,$5)`,
-        [null, null, null, null, parsed ?? null]
-      );
-      console.log("📥 APlus (raw/unknown) saved.");
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (s.startsWith("{") && s.endsWith("}")) {
+      try { parsed = JSON.parse(s); } catch { parsed = null; }
     }
-
-    // Optional: forward to Zapier (Zap should require header X-Api-Key == ZAP_API_KEY)
-    await relayToZap("aplus", parsed);
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("APlus save/relay error:", e.message);
-    res.status(500).json({ error: "server_error" });
+  } else if (raw && typeof raw === "object") {
+    parsed = raw;
   }
+
+  const record = {
+    received_at: new Date().toISOString(),
+    product: PRODUCT_ID,
+    payload_type: parsed ? "json" : typeof raw,
+    payload: parsed || raw || null,
+  };
+
+  // Log to console + DB
+  if (parsed?.type === "APlus") {
+    console.log("📥 APlus JSON:", record);
+  } else {
+    console.log("📥 APlus (raw/unknown):", record);
+  }
+  await logAPlus(record);
+
+  // Optional relay to Zapier
+  if (ZAP_B_URL) {
+    postToZap({ tag: "aplus", product: PRODUCT_ID, payload: parsed || raw, ts: record.received_at })
+      .catch(e => console.error("Zap relay error:", e.message));
+  }
+
+  return res.json({ ok: true });
 });
 
-// ---------- health ----------
-app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+// --------------------- START SERVER ------------------------
+app.listen(PORT, () => {
+  console.log(`HTTP server listening on ${PORT}`);
+});
 
-// ---------- Cronitor ping ----------
-async function pingCronitor() {
+// ----------------- CRONITOR KEEP-ALIVE ---------------------
+function pingCronitor() {
   if (!CRONITOR_URL) return;
-  try {
-    const r = await fetch(CRONITOR_URL, { method: "GET" });
-    if (!r.ok) console.error("Cronitor ping failed:", r.status);
-  } catch (e) {
-    console.error("Cronitor ping error:", e.message);
-  }
+  fetch(CRONITOR_URL).catch(e => console.error("Cronitor ping error:", e.message));
 }
 setInterval(pingCronitor, 15000);
 
-// ---------- DOM poller ----------
+// --------------------- ZAP RELAY ---------------------------
+async function postToZap(obj) {
+  if (!ZAP_B_URL) return;
+  const r = await fetch(ZAP_B_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(ZAP_API_KEY ? { "x-api-key": ZAP_API_KEY } : {}),
+      "x-pipe-tag": obj.tag || "event",
+    },
+    body: JSON.stringify(obj),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    console.error("Zap POST failed:", r.status, t);
+  } else {
+    console.log(`✅ Relayed to Zap (${obj.tag})`);
+  }
+}
+
+// ---------------------- DOM POLLER -------------------------
 async function fetchDOM() {
   try {
     const url = `https://api.exchange.coinbase.com/products/${PRODUCT_ID}/book?level=2`;
@@ -235,62 +269,45 @@ async function fetchDOM() {
     if (!r.ok) throw new Error(`DOM HTTP ${r.status}`);
     const book = await r.json();
 
-    const bestAsk = book.asks?.[0] || null;
-    const bestBid = book.bids?.[0] || null;
+    const a = book.asks?.[0] ?? null;
+    const b = book.bids?.[0] ?? null;
 
-    const p_ask = bestAsk ? parseFloat(bestAsk[0]) : null;
-    const q_ask = bestAsk ? parseFloat(bestAsk[1]) : null;
-    const p_bid = bestBid ? parseFloat(bestBid[0]) : null;
-    const q_bid = bestBid ? parseFloat(bestBid[1]) : null;
-
-    return {
-      product: PRODUCT_ID,
-      p_ask, q_ask, p_bid, q_bid,
+    const dom = {
+      type: "dom",
+      p_ask: a ? parseFloat(a[0]) : null,
+      q_ask: a ? parseFloat(a[1]) : null,
+      p_bid: b ? parseFloat(b[0]) : null,
+      q_bid: b ? parseFloat(b[1]) : null,
       sequence: book.sequence ?? null,
-      ts: new Date().toISOString()
+      ts: new Date().toISOString(),
     };
+
+    console.log("DOM →", dom);
+    await logDOM(dom);
+
+    if (ZAP_DOM_URL) {
+      try {
+        const rr = await fetch(ZAP_DOM_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ZAP_DOM_API_KEY ? { "x-api-key": ZAP_DOM_API_KEY } : {}),
+          },
+          body: JSON.stringify(dom),
+        });
+        if (!rr.ok) console.error("DOM POST failed:", rr.status);
+      } catch (e) {
+        console.error("DOM POST error:", e.message);
+      }
+    }
   } catch (e) {
     console.error("DOM fetch error:", e.message);
-    return null;
   }
 }
-
-async function domTick() {
-  const dom = await fetchDOM();
-  if (!dom) return;
-
-  console.log("DOM →", dom);
-  try {
-    await pool.query(
-      `insert into dom_ticks(product, p_ask, q_ask, p_bid, q_bid, sequence, ts)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [dom.product, dom.p_ask, dom.q_ask, dom.p_bid, dom.q_bid, dom.sequence, dom.ts]
-    );
-  } catch (e) {
-    console.error("DOM save error:", e.message);
-  }
-
-  // optional fanout
-  if (ZAP_DOM_URL) {
-    try {
-      const r = await fetch(ZAP_DOM_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ZAP_DOM_API_KEY ? { "x-api-key": ZAP_DOM_API_KEY } : {})
-        },
-        body: JSON.stringify({ type: "dom", ...dom })
-      });
-      if (!r.ok) console.error("DOM POST failed:", r.status);
-    } catch (e) {
-      console.error("DOM POST error:", e.message);
-    }
-  }
-}
-setInterval(domTick, domPollMs);
+setInterval(fetchDOM, domPollMs);
 console.log(`Started DOM poll @ ${domPollMs}ms`);
 
-// ---------- CVD websocket ----------
+// --------------------- CVD WEBSOCKET -----------------------
 let ws = null;
 let wsHeartbeat = null;
 let cvd = 0;
@@ -299,17 +316,21 @@ let cvdEma = 0;
 function startCVD() {
   const endpoint = "wss://ws-feed.exchange.coinbase.com";
 
-  const connect = () => {
+  function connect() {
     ws = new WebSocket(endpoint);
 
     ws.on("open", () => {
       console.log("CVD WS open");
-      ws.send(JSON.stringify({
-        type: "subscribe",
-        channels: [{ name: "matches", product_ids: [PRODUCT_ID] }]
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "subscribe",
+          channels: [{ name: "matches", product_ids: [PRODUCT_ID] }],
+        })
+      );
       clearInterval(wsHeartbeat);
-      wsHeartbeat = setInterval(() => { try { ws.ping(); } catch {} }, 25000);
+      wsHeartbeat = setInterval(() => {
+        try { ws.ping(); } catch (_e) {}
+      }, 25000);
     });
 
     ws.on("message", (buf) => {
@@ -334,66 +355,26 @@ function startCVD() {
 
     ws.on("error", (err) => {
       console.error("CVD WS error:", err.message);
-      try { ws.close(); } catch {}
+      try { ws.close(); } catch (_e) {}
     });
-  };
+  }
 
   connect();
 }
 startCVD();
 
-// flush a heartbeat row every 15s
-setInterval(async () => {
-  const row = {
-    product: PRODUCT_ID,
+setInterval(() => {
+  const snapshot = {
+    type: "cvd",
     cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
     cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
-    ts: new Date().toISOString()
+    ts: new Date().toISOString(),
   };
-  console.log("CVD →", row);
-  try {
-    await pool.query(
-      `insert into cvd_ticks(product, cvd, cvd_ema, ts) values ($1,$2,$3,$4)`,
-      [row.product, row.cvd, row.cvd_ema, row.ts]
-    );
-  } catch (e) {
-    console.error("CVD save error:", e.message);
-  }
+  console.log("CVD →", snapshot);
+  logCVD(snapshot);
 }, 15000);
 
-// ---------- nightly retention (02:30 UTC) ----------
-function msUntil(hourUTC, minUTC) {
-  const now = new Date();
-  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hourUTC, minUTC, 0));
-  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-  return next - now;
-}
-async function runRetention() {
-  try {
-    await pool.query(`
-      -- keep A+ events ~180 days
-      delete from aplus_events where ts < now() - interval '180 days';
-      -- keep noisy DOM/CVD ~14 days
-      delete from dom_ticks where ts < now() - interval '14 days';
-      delete from cvd_ticks where ts < now() - interval '14 days';
-      -- optional space reclaim
-      vacuum analyze aplus_events;
-      vacuum analyze dom_ticks;
-      vacuum analyze cvd_ticks;
-      vacuum analyze trade_feedback;
-    `);
-    console.log("🧹 Retention done.");
-  } catch (e) {
-    console.error("Retention error:", e.message);
-  }
-}
-setTimeout(() => {
-  runRetention();
-  setInterval(runRetention, 24 * 3600 * 1000);
-}, msUntil(2, 30)); // start at ~02:30 UTC
+console.log(`CVD EMA len ${cvdEmaLen}`);
 
-// ---------- start server ----------
-app.listen(PORT, () => {
-  console.log(`HTTP server listening on ${PORT}`);
-  console.log(`CVD EMA len ${cvdEmaLen}`);
-});
+// -------------------- BOOTSTRAP DB ------------------------
+initDB().catch((e) => console.error("DB init error:", e.message));
