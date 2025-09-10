@@ -42,6 +42,13 @@ const app = express();
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
+app.post("/aplus", async (req, res) => {
+  console.log("APlus payload (from TV):", req.body);
+  // Forward A+ to Zapier
+  await postToZap({ source: "render", ...req.body });
+  res.json({ status: "ok" });
+});
+
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
 // (Legacy helper) accept external DOM if ever used
