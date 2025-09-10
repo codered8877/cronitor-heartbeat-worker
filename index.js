@@ -353,6 +353,48 @@ app.get("/backup", async (req, res) => {
   }
 });
 
+// ========================================
+// BACKUP STATUS CHECK ENDPOINT
+// ========================================
+app.get("/backup/check", async (req, res) => {
+  try {
+    const token = req.get("X-Auth-Token") || req.query.token;
+    if (!process.env.BACKUP_TOKEN || token !== process.env.BACKUP_TOKEN) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    // Replace with wherever you store backup files
+    const backupDir = path.join(__dirname, "backups");
+    const files = await fs.promises.readdir(backupDir);
+
+    if (files.length === 0) {
+      return res.status(500).json({ ok: false, error: "No backups found" });
+    }
+
+    // Sort by latest modified
+    const latest = files
+      .map(file => ({
+        name: file,
+        path: path.join(backupDir, file),
+      }))
+      .sort((a, b) => fs.statSync(b.path).mtime - fs.statSync(a.path))
+      [0];
+
+    const stats = await fs.promises.stat(latest.path);
+    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+
+    res.json({
+      ok: true,
+      latestBackup: latest.name,
+      sizeMB: `${sizeMB} MB`,
+      modifiedAt: stats.mtime,
+    });
+  } catch (err) {
+    console.error("[BACKUP CHECK ERROR]", err);
+    res.status(500).json({ ok: false, error: "Unable to check backups" });
+  }
+});
+
 // ====================================
 // RETENTION ENDPOINT (secure)
 // ====================================
