@@ -1,20 +1,17 @@
 {
-  "name": "cronitor-heartbeat-worker",
+  "name": "aplus-btc-pipeline",
   "version": "1.0.0",
-  "description": "BTC DOM/CVD logger with Zapier relay + Coinbase WS + TradingView webhook",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "body-parser": "^1.20.2",
-    "node-fetch": "^3.3.2",
-    "pg": "^8.11.3",
-    "ws": "^8.13.0"
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "ws": "^8.16.0"
   },
   "engines": {
-    "node": ">=18.x"
+    "node": ">=18"
   }
 }
