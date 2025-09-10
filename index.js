@@ -213,6 +213,18 @@ const app = express();
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
+// ====================================
+// KEEP RENDER SERVICE ALWAYS AWAKE
+// ====================================
+const KEEPALIVE_URL = process.env.KEEPALIVE_URL
+  || (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}/healthz` : "http://localhost:3000/healthz");
+
+setInterval(() => {
+  fetch(KEEPALIVE_URL)
+    .then(() => console.log(`[KEEPALIVE] Pinged ${KEEPALIVE_URL}`))
+    .catch((err) => console.error("[KEEPALIVE] Ping failed:", err.message));
+}, 240000); // every 4 minutes
+
 // Health
 app.get("/", (_req, res) => res.status(200).send("APlus pipeline up"));
 app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
