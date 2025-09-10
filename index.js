@@ -1,300 +1,239 @@
-// src/index.js
-// Full pipeline: DOM poller + CVD WS + /aplus webhook + Zap relay + PG logging
-// ESM, Node >=18 (uses global fetch)
+// index.js — clean server + workers + safe Postgres init (Render-ready)
+// Node 20+ (uses global fetch). "type": "module" in package.json.
 
 import express from "express";
-import WebSocket from "ws";
-import pkg from "pg";
-const { Pool } = pkg;
+import pg from "pg";
+const { Pool } = pg;
 
-// ------------------------ ENV ------------------------
-const {
-  // Instrument
-  PRODUCT_ID = "BTC-USD",
+// ---------- ENV (matches your screenshots) ----------
+const PORT            = Number(process.env.PORT || 10000);
 
-  // Poll/EMA tuning
-  DOM_POLL_MS = "6000",          // >= 2000ms enforced
-  CVD_EMA_LEN = "34",
+// DB: use FIELDS ONLY (ignore POSTGRES_URL on purpose)
+const DB = {
+  host: process.env.POSTGRES_HOST,                 // e.g. dpg-d300nsvdiees738rlnog-a
+  port: Number(process.env.POSTGRES_PORT || 5432), // 5432
+  database: process.env.POSTGRES_DB,               // btc_scalp_logs
+  user: process.env.POSTGRES_USER,                 // btc_logger
+  password: process.env.POSTGRES_PASSWORD,         // ********
+  ssl: { rejectUnauthorized: false }               // Render/Neon/PG-hosted
+};
 
-  // TradingView shared secret (optional)
-  TV_API_KEY = "",               // require header 'x-tv-key' when set
+// A+ webhook bits
+const TV_API_KEY  = process.env.TV_API_KEY;        // shared secret from TradingView (or “YOUR_TV_SHARED_SECRET”)
+const ZAP_HOOK    = process.env.ZAP_B_URL;         // https://hooks.zapier.com/hooks/catch/...
+const ZAP_API_KEY = process.env.ZAP_API_KEY || ""; // optional header for Zapier filter
 
-  // Zapier relay (optional)
-  ZAP_B_URL = "",
-  ZAP_API_KEY = "",              // sent as 'x-api-key' if present
+// Workers
+const DOM_PRODUCT = process.env.DOM_PRODUCT || process.env.PRODUCT_ID || "BTC-USD";
+const DOM_LEVEL   = Number(process.env.DOM_LEVEL || 2);     // 1|2
+const DOM_POLL_MS = Number(process.env.DOM_POLL_MS || 6000);
+const CVD_EMA_LEN = Number(process.env.CVD_EMA_LEN || 34);
 
-  // Server
-  PORT = "10000",
+// Optional heartbeat
+const CRONITOR_URL = process.env.CRONITOR_URL || "";
 
-  // Postgres (Render dashboard → Databases → Connection info)
-  POSTGRES_HOST,
-  POSTGRES_PORT,
-  POSTGRES_USER,
-  POSTGRES_PASSWORD,
-  POSTGRES_DB,
-} = process.env;
+// ---------- PG POOL (single source) ----------
+function makePool() {
+  // Loud but safe boot log (no secrets)
+  console.log("PG cfg =>", {
+    host: DB.host, port: DB.port, db: DB.database,
+    user_present: !!DB.user, pass_present: !!DB.password,
+    url_present: !!process.env.POSTGRES_URL   // we intentionally do not use this
+  });
 
-const domPollMs = Math.max(2000, parseInt(DOM_POLL_MS, 10) || 6000);
-const cvdEmaLen = Math.max(2, parseInt(CVD_EMA_LEN, 10) || 34);
-const alpha = 2 / (cvdEmaLen + 1);
+  for (const [k, v] of Object.entries(DB)) {
+    if (v === undefined || v === null || v === "" || (k === "port" && Number.isNaN(v))) {
+      throw new Error(`Missing PG env: ${k}`);
+    }
+  }
+  return new Pool(DB);
+}
+const pool = makePool();
 
-// ------------------------ DB -------------------------
-const pool = new Pool({
-  host: POSTGRES_HOST,
-  port: POSTGRES_PORT ? Number(POSTGRES_PORT) : 5432,
-  user: POSTGRES_USER,
-  password: POSTGRES_PASSWORD,
-  database: POSTGRES_DB,
-  max: 3,
-  idleTimeoutMillis: 30_000,
-});
+// Prove DB at boot
+(async () => {
+  try {
+    const r = await pool.query("select 1 as ok");
+    console.log("PG ready ✓", r.rows[0]);
+  } catch (e) {
+    console.error("PG boot test failed ✗", e.message);
+  }
+})();
 
-async function initDB() {
+// ---------- SCHEMA (idempotent) ----------
+async function ensureSchema() {
   await pool.query(`
     create table if not exists aplus_events (
       id bigserial primary key,
-      ts timestamptz not null,
-      product text not null,
-      payload jsonb not null
+      ts timestamptz not null default now(),
+      score numeric not null,
+      reason text not null,
+      payload jsonb
     );
-    create index if not exists aplus_events_ts_idx on aplus_events(ts);
-
     create table if not exists dom_ticks (
       id bigserial primary key,
       ts timestamptz not null,
-      product text not null,
+      sequence bigint,
       p_ask numeric, q_ask numeric,
-      p_bid numeric, q_bid numeric,
-      sequence bigint
+      p_bid numeric, q_bid numeric
     );
-    create index if not exists dom_ticks_ts_idx on dom_ticks(ts);
-
     create table if not exists cvd_ticks (
       id bigserial primary key,
       ts timestamptz not null,
-      product text not null,
-      cvd numeric not null,
-      cvd_ema numeric not null
+      cvd numeric,
+      cvd_ema numeric
     );
-    create index if not exists cvd_ticks_ts_idx on cvd_ticks(ts);
+    create index if not exists idx_aplus_ts on aplus_events(ts);
+    create index if not exists idx_dom_ts on dom_ticks(ts);
+    create index if not exists idx_cvd_ts on cvd_ticks(ts);
   `);
-  console.log("DB ready");
+  console.log("Schema ready ✓");
 }
-initDB().catch(e => console.error("DB init error:", e.message));
+ensureSchema().catch(err => console.error("Schema error", err));
 
-// --------------------- EXPRESS -----------------------
+// ---------- EXPRESS ----------
 const app = express();
+app.disable("x-powered-by");
+app.use(express.json({ limit: "256kb" }));
 
-// Accept JSON *and* text/plain (TV mobile)
-app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
-app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
-
-app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+app.get("/", (_req, res) => res.send("OK"));
 
 /**
- * Helper endpoint to produce a sample APlus payload for Zapier “Test Trigger”
- * GET /zap-test
+ * POST /aplus
+ * Headers: x-tv-key: <TV_API_KEY>
+ * Body (JSON): { score: number, reason: string, ...anything }  // anything is stored as payload+forwarded
  */
-app.get("/zap-test", (_req, res) => {
-  const sample = {
-    type: "APlus",
-    s: PRODUCT_ID.replace("-", ""),
-    t: Date.now(),
-    f: "1",
-    p: 111234.56,
-    d: "LONG",
-    e: "APlus",
-    sc: 60,
-    sr: false,
-    R: "LOCATION|MICRO"
-  };
-  res.json(sample);
-});
-
-// ------------- TradingView A+ webhook (SINGLE route) -------------
 app.post("/aplus", async (req, res) => {
   try {
-    // Shared-secret (optional)
-    if (TV_API_KEY && req.headers["x-tv-key"] !== TV_API_KEY) {
-      return res.status(401).json({ error: "unauthorized" });
+    // Simple shared-secret gate
+    const key = req.header("x-tv-key") || req.query.key;
+    if (!TV_API_KEY || key !== TV_API_KEY) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
-    // TV can send text/plain or JSON
-    let raw = req.body;
-    let parsed = null;
-
-    if (typeof raw === "string") {
-      const s = raw.trim();
-      if (s.startsWith("{") && s.endsWith("}")) {
-        try { parsed = JSON.parse(s); } catch { /* keep null */ }
-      }
-    } else if (raw && typeof raw === "object") {
-      parsed = raw;
+    const { score, reason, ...rest } = (req.body || {});
+    if (score === undefined || reason === undefined) {
+      return res.status(400).json({ ok: false, error: "score and reason required" });
     }
 
-    const payload = parsed || (typeof raw === "string" ? { message: raw } : raw) || {};
-    const record = {
-      received_at: new Date().toISOString(),
-      kind: "aplus",
-      product: PRODUCT_ID,
-      payload_type: parsed ? "json" : typeof raw,
-      payload
-    };
+    // 1) store
+    await pool.query(
+      `insert into aplus_events (score, reason, payload) values ($1,$2,$3)`,
+      [Number(score), String(reason), rest || {}]
+    );
 
-    if (payload?.type === "APlus") {
-      console.log("📥 APlus JSON:", record);
-    } else {
-      console.log("📥 APlus (raw/unknown):", record);
-    }
-
-    // Log to PG (non-blocking failure)
-    pool.query(
-      `insert into aplus_events (ts, product, payload) values ($1,$2,$3)`,
-      [new Date(), PRODUCT_ID, payload]
-    ).catch(e => console.error("PG insert aplus_events error:", e.message));
-
-    // Relay to Zapier if configured
-    if (ZAP_B_URL) {
+    // 2) relay to Zapier (as JSON so your Zap can filter by fields)
+    if (ZAP_HOOK) {
       try {
-        const zr = await fetch(ZAP_B_URL, {
+        const z = await fetch(ZAP_HOOK, {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
-            ...(ZAP_API_KEY ? { "x-api-key": ZAP_API_KEY } : {}),
+            "content-type": "application/json",
+            ...(ZAP_API_KEY ? { "x-zap-key": ZAP_API_KEY } : {})
           },
-          // Send *exactly* the APlus object so Zapier sees the fields
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            type: "aplus",
+            score: Number(score),
+            reason: String(reason),
+            ts: new Date().toISOString(),
+            product: DOM_PRODUCT,
+            ...rest
+          })
         });
-        if (!zr.ok) {
-          const t = await zr.text().catch(() => "");
-          console.error("Zap POST failed:", zr.status, t);
-        } else {
-          console.log("✅ Relayed to Zapier");
-        }
-      } catch (e) {
-        console.error("Zap POST error:", e.message);
+        console.log("Zapier relay →", z.status);
+      } catch (zerr) {
+        console.error("Zapier relay failed:", zerr.message);
       }
     }
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
-    console.error("APlus handler error:", e.message);
-    res.status(500).json({ error: e.message });
+    console.error("POST /aplus error:", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
-// -------------------- DOM POLLER --------------------
-async function fetchDOM() {
-  try {
-    const url = `https://api.exchange.coinbase.com/products/${PRODUCT_ID}/book?level=2`;
-    const r = await fetch(url, { headers: { "User-Agent": "render-app" } });
-    if (!r.ok) throw new Error(`DOM HTTP ${r.status}`);
-    const book = await r.json();
+// ---------- WORKER: DOM poll (public Coinbase order book) ----------
+async function fetchDom() {
+  const url = `https://api.exchange.coinbase.com/products/${DOM_PRODUCT}/book?level=${DOM_LEVEL}`;
+  const r = await fetch(url, { headers: { "user-agent": "aplus-worker" } });
+  if (!r.ok) throw new Error(`DOM fetch HTTP ${r.status}`);
+  const j = await r.json();
 
-    const bestAsk = book.asks?.[0] || [];
-    const bestBid = book.bids?.[0] || [];
+  // Top of book
+  const topAsk = j.asks?.[0] || [];
+  const topBid = j.bids?.[0] || [];
+  const p_ask = Number(topAsk[0] || 0);
+  const q_ask = Number(topAsk[1] || 0);
+  const p_bid = Number(topBid[0] || 0);
+  const q_bid = Number(topBid[1] || 0);
+  const sequence = Number(j.sequence || 0);
+  const ts = new Date().toISOString();
 
-    const dom = {
-      type: "dom",
-      p_ask: bestAsk[0] ? parseFloat(bestAsk[0]) : null,
-      q_ask: bestAsk[1] ? parseFloat(bestAsk[1]) : null,
-      p_bid: bestBid[0] ? parseFloat(bestBid[0]) : null,
-      q_bid: bestBid[1] ? parseFloat(bestBid[1]) : null,
-      sequence: book.sequence ?? null,
-      ts: new Date().toISOString(),
-    };
+  const rec = { type: "dom", p_ask, q_ask, p_bid, q_bid, sequence, ts };
+  console.log("DOM →", rec);
 
-    console.log("DOM →", dom);
-
-    // Log to PG
-    pool.query(
-      `insert into dom_ticks (ts, product, p_ask, q_ask, p_bid, q_bid, sequence)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [new Date(), PRODUCT_ID, dom.p_ask, dom.q_ask, dom.p_bid, dom.q_bid, dom.sequence]
-    ).catch(e => console.error("PG insert dom_ticks error:", e.message));
-
-    return dom;
-  } catch (e) {
-    console.error("DOM fetch error:", e.message);
-    return null;
-  }
+  // Insert
+  await pool.query(
+    `insert into dom_ticks (ts, sequence, p_ask, q_ask, p_bid, q_bid)
+     values (to_timestamp($1), $2, $3, $4, $5, $6)`,
+    [Date.parse(ts) / 1000, sequence, p_ask, q_ask, p_bid, q_bid]
+  );
 }
-setInterval(fetchDOM, domPollMs);
-console.log(`Started DOM poll @ ${domPollMs}ms`);
 
-// ------------------- CVD WEBSOCKET ------------------
-let ws = null;
-let wsHeartbeat = null;
-let cvd = 0;     // session cumulative delta volume
-let cvdEma = 0;
-
-function startCVD() {
-  const endpoint = "wss://ws-feed.exchange.coinbase.com";
-
-  function connect() {
-    ws = new WebSocket(endpoint);
-
-    ws.on("open", () => {
-      console.log("CVD WS open");
-      ws.send(JSON.stringify({
-        type: "subscribe",
-        channels: [{ name: "matches", product_ids: [PRODUCT_ID] }],
-      }));
-      clearInterval(wsHeartbeat);
-      wsHeartbeat = setInterval(() => { try { ws.ping(); } catch {} }, 25_000);
-    });
-
-    ws.on("message", (buf) => {
-      try {
-        const msg = JSON.parse(buf.toString());
-        if (msg.type === "match" && msg.product_id === PRODUCT_ID) {
-          const size = parseFloat(msg.size || "0");
-          const side = msg.side; // "buy" | "sell"
-          const signed = side === "buy" ? size : side === "sell" ? -size : 0;
-
-          cvd += signed;
-          cvdEma = cvdEma === 0 ? cvd : alpha * cvd + (1 - alpha) * cvdEma;
-        }
-      } catch (e) {
-        console.error("CVD msg parse error:", e.message);
-      }
-    });
-
-    ws.on("close", () => {
-      console.log("CVD WS closed; reconnecting in 3s");
-      clearInterval(wsHeartbeat);
-      setTimeout(connect, 3000);
-    });
-
-    ws.on("error", (err) => {
-      console.error("CVD WS error:", err.message);
-      try { ws.close(); } catch {}
-    });
-  }
-
-  connect();
-}
-startCVD();
-
-// Heartbeat log + store to PG every 15s
-setInterval(() => {
-  const row = {
-    type: "cvd",
-    cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
-    cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
-    ts: new Date().toISOString(),
+// Poller
+setTimeout(() => {
+  console.log(`Started DOM poll @ ${DOM_POLL_MS}ms`);
+  const loop = async () => {
+    try { await fetchDom(); }
+    catch (e) { console.error("DOM fetch error:", e.message); }
+    finally { setTimeout(loop, DOM_POLL_MS); }
   };
-  console.log("CVD →", row);
+  loop();
+}, 1000);
 
-  pool.query(
-    `insert into cvd_ticks (ts, product, cvd, cvd_ema) values ($1,$2,$3,$4)`,
-    [new Date(), PRODUCT_ID, row.cvd, row.cvd_ema]
-  ).catch(e => console.error("PG insert cvd_ticks error:", e.message));
-}, 15_000);
+// ---------- WORKER: CVD (toy version using last DOM delta + EMA) ----------
+let cvd = 0;
+let ema = 0;
+const alpha = 2 / (CVD_EMA_LEN + 1);
 
-console.log(`CVD EMA len ${cvdEmaLen}`);
+async function stepCvd() {
+  try {
+    // Use last DOM snapshot as a crude proxy for delta pressure
+    const { rows } = await pool.query(
+      `select p_ask, q_ask, p_bid, q_bid
+       from dom_ticks order by id desc limit 1`
+    );
+    if (rows.length) {
+      const { q_ask, q_bid } = rows[0];
+      const delta = Number(q_bid || 0) - Number(q_ask || 0);
+      cvd += delta;
+      ema = ema === 0 ? cvd : (alpha * cvd + (1 - alpha) * ema);
 
-// -------------------- START SERVER -------------------
-app.listen(Number(PORT), () => {
+      const ts = new Date().toISOString();
+      const rec = { type: "cvd", cvd: Number(cvd.toFixed(6)), cvd_ema: Number(ema.toFixed(6)), ts };
+      console.log("CVD →", rec);
+
+      await pool.query(
+        `insert into cvd_ticks (ts, cvd, cvd_ema)
+         values (to_timestamp($1), $2, $3)`,
+        [Date.parse(ts) / 1000, rec.cvd, rec.cvd_ema]
+      );
+    }
+  } catch (e) {
+    console.error("CVD step error:", e.message);
+  }
+}
+setInterval(stepCvd, Math.max(3000, Math.floor(DOM_POLL_MS / 2)));
+
+// ---------- Cronitor heartbeat (optional) ----------
+if (CRONITOR_URL) {
+  setInterval(() => {
+    fetch(CRONITOR_URL, { method: "GET" }).catch(() => {});
+  }, 60_000);
+}
+
+// ---------- START ----------
+app.listen(PORT, () => {
   console.log(`HTTP server listening on ${PORT}`);
 });
