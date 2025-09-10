@@ -100,6 +100,28 @@ await pool.query(`
   );
 `);
 
+// Quick test helper to send a sample APlus to Zapier so Zapier can learn the fields.
+// Guard it with ?key=<ZAP_API_KEY>
+app.get("/zap-test", async (req, res) => {
+  if (ZAP_API_KEY && req.query.key !== ZAP_API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const sample = {
+    type: "APlus",
+    s: "BTCUSD",
+    t: Date.now(),
+    f: "1",
+    p: 111520.71,
+    d: "LONG",
+    e: "APlus",
+    sc: 60,
+    sr: false,
+    R: "LOCATION|MICRO",
+  };
+  await postToZapSafe(sample, "aplus");
+  return res.json({ ok: true, sent: sample });
+});
+
 // ---------- helpers ----------
 const app = express();
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
