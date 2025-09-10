@@ -216,14 +216,51 @@ app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-ur
 // ====================================
 // KEEP RENDER SERVICE ALWAYS AWAKE
 // ====================================
-const KEEPALIVE_URL = process.env.KEEPALIVE_URL
-  || (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}/healthz` : "http://localhost:3000/healthz");
+const PORT = Number(process.env.PORT || 10000);
 
-setInterval(() => {
-  fetch(KEEPALIVE_URL)
-    .then(() => console.log(`[KEEPALIVE] Pinged ${KEEPALIVE_URL}`))
-    .catch((err) => console.error("[KEEPALIVE] Ping failed:", err.message));
-}, 240000); // every 4 minutes
+// Prefer explicit env (best)
+const EXTERNAL = process.env.KEEPALIVE_URL ||
+  (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}/health` : null);
+
+// Local fallback (doesn't help Render's idle policy, but avoids noisy logs if external is flaky)
+const LOCAL = `http://127.0.0.1:${PORT}/health`;
+
+let kaFails = 0;
+const jitter = () => 90000 + Math.floor(Math.random() * 30000); // 90–120s
+
+async function ping(url) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 5000);
+  try {
+    const res = await fetch(url, { method: "GET", cache: "no-store", signal: ac.signal });
+    clearTimeout(t);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return true;
+  } catch (e) {
+    clearTimeout(t);
+    return false;
+  }
+}
+
+if (EXTERNAL) {
+  console.log(`[KEEPALIVE] Using external ${EXTERNAL}, fallback ${LOCAL}`);
+  setInterval(async () => {
+    const okExt = await ping(EXTERNAL);
+    if (okExt) {
+      if (kaFails) console.log("[KEEPALIVE] Recovered");
+      kaFails = 0;
+      return;
+    }
+    // try local once before counting it as a fail (just to reduce red noise)
+    const okLocal = await ping(LOCAL);
+    if (!okLocal) {
+      kaFails++;
+      if (kaFails >= 2) console.warn(`[KEEPALIVE] ${kaFails} consecutive failures`);
+    }
+  }, jitter()); // every ~1.5–2 minutes with jitter
+} else {
+  console.log("[KEEPALIVE] Skipped (no EXTERNAL URL available)");
+}
 
 // Health
 app.get("/", (_req, res) => res.status(200).send("APlus pipeline up"));
