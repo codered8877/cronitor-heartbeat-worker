@@ -1,15 +1,13 @@
 {
-  "name": "btc-dom-cvd-service",
+  "name": "aplus-relay",
   "version": "1.0.0",
-  "description": "BTC DOM + CVD live feed + TradingView webhook",
-  "type": "module",
+  "description": "TradingView APlus webhook relay",
   "main": "index.js",
-  "scripts": { "start": "node index.js" }
+  "type": "module",
+  "scripts": {
     "start": "node index.js"
   },
-  "dependencies": { "express": "^4.19.2" }
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2",
-    "ws": "^8.13.0"
+  "dependencies": {
+    "express": "^4.19.2"
   }
 }
