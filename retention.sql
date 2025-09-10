@@ -1,15 +1,25 @@
--- Keep A+ events 180 days (keep longer for analysis)
-delete from aplus_events where ts < now() - interval '180 days';
+-- Keep compact A+ signals for 180 days
+DELETE FROM aplus_signals
+WHERE ts < NOW() - INTERVAL '180 days';
 
--- Keep feedback forever (skip pruning)
--- delete from trade_feedback where ts < now() - interval '365 days';
+-- Keep raw payloads shorter: 30 days
+DELETE FROM aplus_events
+WHERE ts < NOW() - INTERVAL '30 days';
 
--- DOM/CVD are noisy: keep 14 days
-delete from dom_ticks where ts < now() - interval '14 days';
-delete from cvd_ticks where ts < now() - interval '14 days';
+-- DOM snapshots are noisy: keep 14 days
+DELETE FROM dom_snapshots
+WHERE ts < NOW() - INTERVAL '14 days';
 
--- Optional: reclaim space
-vacuum analyze aplus_events;
-vacuum analyze dom_ticks;
-vacuum analyze cvd_ticks;
-vacuum analyze trade_feedback;
+-- CVD ticks are also noisy: keep 14 days
+DELETE FROM cvd_ticks
+WHERE ts < NOW() - INTERVAL '14 days';
+
+-- Keep trade feedback forever (optional)
+-- DELETE FROM trade_feedback WHERE ts < NOW() - INTERVAL '365 days';
+
+-- Optional: reclaim storage space and refresh stats
+VACUUM ANALYZE aplus_signals;
+VACUUM ANALYZE aplus_events;
+VACUUM ANALYZE dom_snapshots;
+VACUUM ANALYZE cvd_ticks;
+VACUUM ANALYZE trade_feedback;
