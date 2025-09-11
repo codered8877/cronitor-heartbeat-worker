@@ -781,6 +781,54 @@ app.post("/aplus/test", async (req, res) => {
   }
 });
 
+// --- ONE-TIME MIGRATION: add/ensure trade_feedback columns (token guarded)
+// GET /admin/migrate/trade_feedback?token=YOUR_SECRET
+app.get("/admin/migrate/trade_feedback", async (req, res) => {
+  try {
+    const token = (req.query.token || req.get("X-Admin-Token") || "").toString();
+    const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.RETENTION_TOKEN || "";
+    if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    // Only the exact statements we want (no user input)
+    const statements = [
+      `create table if not exists trade_feedback (
+         id bigserial primary key,
+         ts timestamptz not null default now()
+       );`,
+      `alter table trade_feedback
+         add column if not exists signal_id bigint;`,
+      `alter table trade_feedback
+         add column if not exists outcome text;`,
+      `alter table trade_feedback
+         add column if not exists rr double precision;`,
+      `alter table trade_feedback
+         add column if not exists notes text;`,
+      `create index if not exists idx_feedback_ts on trade_feedback(ts desc);`,
+      `create index if not exists idx_feedback_signal on trade_feedback(signal_id);`
+    ];
+
+    const result = [];
+    for (const sql of statements) {
+      const r = await pg.query(sql);
+      result.push({ sql, command: r.command, rowCount: r.rowCount ?? null });
+    }
+
+    // Quick sanity peek of columns
+    const cols = await pg.query(`
+      select column_name, data_type
+      from information_schema.columns
+      where table_name = 'trade_feedback'
+      order by ordinal_position
+    `);
+
+    return res.json({ ok: true, ran: result, columns: cols.rows });
+  } catch (err) {
+    console.error("[MIGRATE trade_feedback] error:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 /* ---------------------- Recent data peeks ---------------------------
    Quick paginated “tail” views for sanity checks in a browser.
