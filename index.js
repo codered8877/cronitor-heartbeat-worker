@@ -475,46 +475,10 @@ app.post("/aplus", async (req, res) => {
       const got = req.headers["x-tv-key"];
       if (!got || got !== ENV.TV_API_KEY) {
         await persistEvent("audit", { route: "/aplus", reason: "unauthorized" }, "tv-guard-fail");
-        return res.status(401).json({ error: "
-
-/* -------------------------  A+ sample (dev only)  ------------------------- */
-// Visit in browser: /aplus/sample?key=YOUR_TV_SHARED_SECRET
-if (ENABLE_TEST_ROUTES) {
-  app.get("/aplus/sample", async (req, res) => {
-    try {
-      // optional shared secret
-      if (ENV.TV_API_KEY) {
-        const got = req.query.key || req.headers["x-tv-key"];
-        if (!got || got !== ENV.TV_API_KEY) {
-          return res.status(401).json({ error: "unauthorized" });
-        }
+        return res.status(401).json({ error: "unauthorized" });
       }
-
-      const sample = {
-        type: "APlus",
-        s: "BTC-USD",
-        t: Date.now(),
-        f: "15",
-        p: 50000,
-        d: "LONG",
-        e: "APlus",
-        sc: 77,
-        sr: false,
-        R: "SCORE|MODE",
-      };
-
-      await persistEvent("aplus", sample);
-      await persistAPlus(sample);
-
-      return res.json({ ok: true, injected: sample });
-    } catch (e) {
-      console.error("❌ /aplus/sample error:", e);
-      return res.status(500).json({ error: e.message });
     }
-  });
-} // END dev route
-/* ------------------------------------------------------------------------- */
-      
+
     // TV sends JSON or raw string
     let raw = req.body, parsed = null;
     if (typeof raw === "string") {
@@ -555,13 +519,50 @@ if (ENABLE_TEST_ROUTES) {
       }
     }
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error("❌ /aplus error:", e.message);
     await persistEvent("audit", { err: e.message }, "aplus-handler-error");
-    res.status(500).json({ error: "server_error" });
+    return res.status(500).json({ error: "server_error" });
   }
-});}
+});
+
+/* -------------------------  A+ sample (dev only)  ------------------------- */
+// Visit in browser: /aplus/sample?key=YOUR_TV_SHARED_SECRET
+if (ENABLE_TEST_ROUTES) {
+  app.get("/aplus/sample", async (req, res) => {
+    try {
+      // optional shared secret
+      if (ENV.TV_API_KEY) {
+        const got = req.query.key || req.headers["x-tv-key"];
+        if (!got || got !== ENV.TV_API_KEY) {
+          return res.status(401).json({ error: "unauthorized" });
+        }
+      }
+
+      const sample = {
+        type: "APlus",
+        s: "BTC-USD",
+        t: Date.now(),
+        f: "15",
+        p: 50000,
+        d: "LONG",
+        e: "APlus",
+        sc: 77,
+        sr: false,
+        R: "SCORE|MODE",
+      };
+
+      await persistEvent("aplus", sample);
+      await persistAPlus(sample);
+
+      return res.json({ ok: true, injected: sample });
+    } catch (e) {
+      console.error("❌ /aplus/sample error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+}
 
 /* ---------------- Nightly prune (server-side) ---------------- */
 async function pruneOld() {
