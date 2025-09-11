@@ -149,6 +149,19 @@ async function dbInit() {
     );
   `);
 
+  await pg.query(`
+  create table if not exists trade_feedback (
+    id         bigserial primary key,
+    ts         timestamptz not null default now(),
+    signal_id  bigint,              -- optional FK to aplus_signals.id
+    outcome    text,                -- e.g., 'WIN' | 'LOSS' | 'BE'
+    rr         double precision,    -- realized risk-reward
+    notes      text
+  );
+`);
+await pg.query(`create index if not exists idx_feedback_ts on trade_feedback(ts desc)`);
+await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
+  
   // Indexes
   await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
   await pg.query(`create index if not exists idx_events_kind    on events(kind)`);
