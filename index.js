@@ -477,6 +477,42 @@ app.post("/aplus", async (req, res) => {
       }
     }
 
+    /* ---------------------- A+ sample signal injector ----------------------
+   Temporary GET endpoint so we can test directly via browser.
+   Visit: /aplus/sample?key=YOUR_API_KEY
+------------------------------------------------------------------------ */
+app.get("/aplus/sample", async (req, res) => {
+  try {
+    if (ENV.TV_API_KEY) {
+      const got = req.query.key || req.get("x-tv-key");
+      if (!got || got !== ENV.TV_API_KEY) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+    }
+
+    const sample = {
+      type: "APlus",
+      s: "BTC-USD",
+      t: Date.now(),
+      f: "15",
+      p: 50000,
+      d: "LONG",
+      e: "APlus",
+      sc: 77,
+      sr: false,
+      R: "SCORE|MODE"
+    };
+
+    await persistEvent("aplus", sample, "aplus-sample");
+    await persistAPlus(sample);
+
+    res.json({ ok: true, injected: sample });
+  } catch (e) {
+    console.error("❌ /aplus/sample error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+    
     // TV sends JSON or raw string
     let raw = req.body, parsed = null;
     if (typeof raw === "string") {
