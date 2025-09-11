@@ -232,7 +232,7 @@ app.get("/retention", async (req, res) => {
     { table: "events",        interval: "30 days"  },
     { table: "dom_snapshots", interval: "14 days"  },
     { table: "cvd_ticks",     interval: "14 days"  },
-    // { table: "trade_feedback", interval: "180 days" }, // optional
+    { table: "trade_feedback",interval: "365 days" },
   ];
   const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
 
@@ -329,7 +329,7 @@ app.get("/backup/check", async (req, res) => {
     if (!BACKUP_TOKEN || token !== BACKUP_TOKEN) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
-    const tables = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks"];
+    const tables = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
     const summary = {};
     for (const t of tables) {
       const { rows: c } = await pg.query(`select count(*)::int as n from ${t}`);
@@ -834,7 +834,6 @@ app.get("/aplus/latest", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 
 /* -------------------------- Zap test hook ---------------------------
    POST /zap/test  (sends a tiny ping to ZAP_B_URL if set)
