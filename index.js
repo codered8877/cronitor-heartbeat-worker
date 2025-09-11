@@ -477,12 +477,12 @@ app.post("/aplus", async (req, res) => {
         await persistEvent("audit", { route: "/aplus", reason: "unauthorized" }, "tv-guard-fail");
         return res.status(401).json({ error: "
 
-// ---------------------- A+ sample (dev only)
-// Visit: /aplus/sample?key=YOUR_API_KEY
+/* -------------------------  A+ sample (dev only)  ------------------------- */
+// Visit in browser: /aplus/sample?key=YOUR_TV_SHARED_SECRET
 if (ENABLE_TEST_ROUTES) {
   app.get("/aplus/sample", async (req, res) => {
     try {
-      // Optional shared secret
+      // optional shared secret
       if (ENV.TV_API_KEY) {
         const got = req.query.key || req.headers["x-tv-key"];
         if (!got || got !== ENV.TV_API_KEY) {
@@ -512,8 +512,9 @@ if (ENABLE_TEST_ROUTES) {
       return res.status(500).json({ error: e.message });
     }
   });
-}
-    
+} // END dev route
+/* ------------------------------------------------------------------------- */
+      
     // TV sends JSON or raw string
     let raw = req.body, parsed = null;
     if (typeof raw === "string") {
