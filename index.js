@@ -475,46 +475,43 @@ app.post("/aplus", async (req, res) => {
       const got = req.headers["x-tv-key"];
       if (!got || got !== ENV.TV_API_KEY) {
         await persistEvent("audit", { route: "/aplus", reason: "unauthorized" }, "tv-guard-fail");
-        return res.status(401).json({ error: "unauthorized" });
-      }
-    }
+        return res.status(401).json({ error: "
 
-    /* ---------------------- A+ sample signal injector ----------------------
-   Temporary GET endpoint so we can test directly via browser.
-   Visit: /aplus/sample?key=YOUR_API_KEY
------------------------------------------------------------------------- */
+// ---------------------- A+ sample (dev only)
+// Visit: /aplus/sample?key=YOUR_API_KEY
 if (ENABLE_TEST_ROUTES) {
-    app.get("/aplus/sample", async (req, res) => {
-  try {
-    if (ENV.TV_API_KEY) {
-      const got = req.query.key || req.get("x-tv-key");
-      if (!got || got !== ENV.TV_API_KEY) {
-        return res.status(401).json({ error: "unauthorized" });
+  app.get("/aplus/sample", async (req, res) => {
+    try {
+      // Optional shared secret
+      if (ENV.TV_API_KEY) {
+        const got = req.query.key || req.headers["x-tv-key"];
+        if (!got || got !== ENV.TV_API_KEY) {
+          return res.status(401).json({ error: "unauthorized" });
+        }
       }
+
+      const sample = {
+        type: "APlus",
+        s: "BTC-USD",
+        t: Date.now(),
+        f: "15",
+        p: 50000,
+        d: "LONG",
+        e: "APlus",
+        sc: 77,
+        sr: false,
+        R: "SCORE|MODE",
+      };
+
+      await persistEvent("aplus", sample);
+      await persistAPlus(sample);
+
+      return res.json({ ok: true, injected: sample });
+    } catch (e) {
+      console.error("❌ /aplus/sample error:", e);
+      return res.status(500).json({ error: e.message });
     }
-
-    const sample = {
-      type: "APlus",
-      s: "BTC-USD",
-      t: Date.now(),
-      f: "15",
-      p: 50000,
-      d: "LONG",
-      e: "APlus",
-      sc: 77,
-      sr: false,
-      R: "SCORE|MODE"
-    };
-
-    await persistEvent("aplus", sample, "aplus-sample");
-    await persistAPlus(sample);
-
-    res.json({ ok: true, injected: sample });
-  } catch (e) {
-    console.error("❌ /aplus/sample error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
+  });
 }
     
     // TV sends JSON or raw string
