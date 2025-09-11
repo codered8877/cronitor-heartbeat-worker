@@ -222,6 +222,106 @@ const app = express();
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
+/* ----------------------------- KPIs (/perf) ----------------------------- */
+app.get("/perf", async (req, res) => {
+  try {
+    const days      = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
+    const minScore  = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
+    const dirFilter = (req.query.dir || "").toUpperCase(); // LONG | SHORT | ""
+
+    // Base WHERE
+    const where = [`tf.ts >= now() - interval '${days} days'`];
+    if (dirFilter === "LONG" || dirFilter === "SHORT") {
+      where.push(`coalesce(asig.dir, '') = '${dirFilter}'`);
+    }
+
+    // Optional score join/filter
+    const joinScore =
+      minScore != null
+        ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= ${minScore}`
+        : `left join aplus_signals asig on asig.id = tf.signal_id`;
+
+    // Core KPIs
+    const coreSql = `
+      with t as (
+        select
+          tf.ts,
+          tf.rr,
+          tf.outcome,
+          asig.dir,
+          asig.symbol,
+          asig.score
+        from trade_feedback tf
+        ${joinScore}
+        where ${where.join(" and ")}
+      )
+      select
+        count(*)::int                                              as trades,
+        avg(case when rr > 0 then 1 else 0 end)::float            as hit_rate,
+        avg(rr)::float                                            as expectancy_rr,
+        sum(case when rr > 0 then rr else 0 end)
+          / nullif(abs(sum(case when rr <= 0 then rr else 0 end)), 0)::float
+                                                                  as profit_factor,
+        min(ts)                                                   as period_start,
+        max(ts)                                                   as period_end
+      from t
+    `;
+    const core = (await pg.query(coreSql)).rows[0];
+
+    // Breakdown by direction (if any signals were joined)
+    const byDirSql = `
+      with t as (
+        select coalesce(asig.dir, 'NA') as dir, tf.rr
+        from trade_feedback tf
+        ${joinScore}
+        where ${where.join(" and ")}
+      )
+      select dir,
+             count(*)::int as n,
+             avg(case when rr>0 then 1 else 0 end)::float as hit_rate,
+             avg(rr)::float as exp_rr
+      from t
+      group by dir
+      order by dir
+    `;
+    const by_dir = (await pg.query(byDirSql)).rows;
+
+    // Score buckets (0–100 into 5 buckets) – harmless if score is null
+    const byScoreSql = `
+      with t as (
+        select coalesce(asig.score, 0) as score, tf.rr
+        from trade_feedback tf
+        ${joinScore}
+        where ${where.join(" and ")}
+      )
+      select
+        width_bucket(score, 0, 100, 5) as bucket,
+        count(*)::int                   as n,
+        round(avg(score)::numeric, 1)   as avg_score,
+        avg(case when rr>0 then 1 else 0 end)::float as hit_rate,
+        avg(rr)::float as exp_rr
+      from t
+      group by bucket
+      order by bucket
+    `;
+    const by_score_bucket = (await pg.query(byScoreSql)).rows;
+
+    res.json({
+      ok: true,
+      window_days: days,
+      filter: { min_score: minScore, dir: dirFilter || "ALL" },
+      core,
+      by_dir,
+      by_score_bucket,
+      generated_at: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error("[/perf] error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+console.log("🧮 KPIs route enabled: GET /perf");
+
 /* ------------------------- RETENTION (GET) ------------------------ */
 // token via header `X-Auth-Token` or query `?token=...`
 const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
