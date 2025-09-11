@@ -1,22 +1,23 @@
-// index.js — Full pipeline (Part 1/2)
-// Node 18+ (has global fetch). package.json must include { "type": "module" }.
+// index.js — APlus pipeline (Part 1/3)
+// Node 18+ (global fetch). package.json must include { "type": "module" }.
 
 import express from "express";
 import { Pool } from "pg";
+import zlib from "zlib";
 
-// ---------------------------- ENV ----------------------------
+/* ------------------------------- ENV ------------------------------- */
 const ENV = {
-  // Core
-  PRODUCT_ID:  process.env.PRODUCT_ID || "BTC-USD",
+  // Core product (Coinbase product id)
+  PRODUCT_ID: process.env.PRODUCT_ID || "BTC-USD",
 
-  // TradingView -> /aplus shared secret (optional, header "x-tv-key")
-  TV_API_KEY:  process.env.TV_API_KEY || "",
+  // TradingView webhook guard (optional). If set, we require header x-tv-key.
+  TV_API_KEY: process.env.TV_API_KEY || "",
 
-  // (Optional) Relay A+ to Zapier webhook
+  // Optional relay of compact A+ signals to Zapier
   ZAP_B_URL:   process.env.ZAP_B_URL || "",
-  ZAP_API_KEY: process.env.ZAP_API_KEY || "", // sent as "x-api-key"
+  ZAP_API_KEY: process.env.ZAP_API_KEY || "",
 
-  // (Optional) Fan-out DOM elsewhere (legacy)
+  // Optional fan-out of DOM snapshots to an external endpoint
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
@@ -24,13 +25,13 @@ const ENV = {
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "6000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
 
-  // Retention (days)
+  // Retention window used by nightly prune
   PRUNE_DAYS: Math.max(1, parseInt(process.env.PRUNE_DAYS || "14", 10)),
 
-  // Keep-alive (optional)
+  // Optional external heartbeat/ping service (e.g. Cronitor)
   CRONITOR_URL: process.env.CRONITOR_URL || "",
 
-  // Postgres — prefer discrete fields; fallback to URL
+  // Postgres (prefer discrete fields; fallback to URL)
   PGHOST:      process.env.POSTGRES_HOST || process.env.PGHOST || "",
   PGPORT:      parseInt(process.env.POSTGRES_PORT || process.env.PGPORT || "5432", 10),
   PGDATABASE:  process.env.POSTGRES_DB || process.env.PGDATABASE || "",
@@ -42,10 +43,10 @@ const ENV = {
   PORT: parseInt(process.env.PORT || "3000", 10),
 };
 
-// --------------- sanity print (no secrets) ---------------
+// non-secret boot banner (helps your Render logs)
 (function bootBanner() {
   const usingFields = !!(ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE);
-  const usingURL = !!ENV.DATABASE_URL;
+  const usingURL    = !!ENV.DATABASE_URL;
   console.log("🔧 Boot cfg:", {
     product: ENV.PRODUCT_ID,
     dom_poll_ms: ENV.DOM_POLL_MS,
@@ -60,9 +61,10 @@ const ENV = {
   });
 })();
 
-// ------------------------- PG CONFIG -------------------------
+/* ---------------------------- PG CONFIG ---------------------------- */
 function buildPgConfig() {
-  const haveFields = ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE && ENV.PGPORT && ENV.PGPASSWORD;
+  const haveFields =
+    ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE && ENV.PGPORT && ENV.PGPASSWORD;
   if (haveFields) {
     return {
       host: ENV.PGHOST,
@@ -70,7 +72,7 @@ function buildPgConfig() {
       user: ENV.PGUSER,
       password: ENV.PGPASSWORD,
       database: ENV.PGDATABASE,
-      ssl: { rejectUnauthorized: false }, // Render PG requires SSL
+      ssl: { rejectUnauthorized: false },   // Render PG requires SSL
       max: 10,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
@@ -87,24 +89,22 @@ function buildPgConfig() {
   }
   throw new Error("❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL.");
 }
-
 const pg = new Pool(buildPgConfig());
 
-// ------------- DB helpers: schema + persistence -------------
+/* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
-  // boot sanity (who am I)
   const c = await pg.connect();
   try {
     const who = await c.query("select current_user, current_database()");
     console.log("✅ Postgres connected as:", who.rows[0]);
   } finally { c.release(); }
 
-  // tables
+  // Tables
   await pg.query(`
     create table if not exists events (
       id        bigserial primary key,
       ts        timestamptz not null default now(),
-      kind      text not null,  -- 'aplus' | 'dom' | 'cvd' | 'audit' | 'prune'
+      kind      text not null,       -- 'aplus' | 'dom' | 'cvd' | 'audit' | 'prune'
       product   text,
       payload   jsonb,
       note      text
@@ -118,7 +118,7 @@ async function dbInit() {
       product     text not null,
       symbol      text,
       tf          text,
-      dir         text,      -- LONG | SHORT
+      dir         text,              -- LONG | SHORT
       price       double precision,
       score       int,
       spider_rej  boolean,
@@ -149,13 +149,13 @@ async function dbInit() {
     );
   `);
 
-  // indexes (idempotent)
-  await pg.query(`create index if not exists idx_events_ts      on events(ts desc);`);
-  await pg.query(`create index if not exists idx_events_kind    on events(kind);`);
-  await pg.query(`create index if not exists idx_events_product on events(product);`);
-  await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc);`);
-  await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc);`);
-  await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc);`);
+  // Indexes
+  await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
+  await pg.query(`create index if not exists idx_events_kind    on events(kind)`);
+  await pg.query(`create index if not exists idx_events_product on events(product)`);
+  await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc)`);
+  await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc)`);
+  await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc)`);
 
   console.log("📦 DB schema ready.");
 }
@@ -166,9 +166,7 @@ async function persistEvent(kind, payload, note = null) {
     [kind, ENV.PRODUCT_ID, payload ?? null, note]
   );
 }
-
 async function persistAPlus(compact) {
-  // Compact Pine JSON: { type:"APlus", s, t, f, p, d, e, sc, sr, R }
   const { s, f, d, p, sc, sr, R } = compact || {};
   await pg.query(
     `insert into aplus_signals(product, symbol, tf, dir, price, score, spider_rej, reasons)
@@ -185,40 +183,29 @@ async function persistAPlus(compact) {
     ]
   );
 }
-
 async function persistDOM(dom) {
   await pg.query(
     `insert into dom_snapshots(product, p_bid, q_bid, p_ask, q_ask, sequence)
      values ($1,$2,$3,$4,$5,$6)`,
-    [
-      ENV.PRODUCT_ID,
-      dom.p_bid ?? null, dom.q_bid ?? null,
-      dom.p_ask ?? null, dom.q_ask ?? null,
-      dom.sequence ?? null,
-    ]
+    [ENV.PRODUCT_ID, dom.p_bid ?? null, dom.q_bid ?? null, dom.p_ask ?? null, dom.q_ask ?? null, dom.sequence ?? null]
   );
 }
-
-async function persistCVD(cvdRow) {
+async function persistCVD(row) {
   await pg.query(
     `insert into cvd_ticks(product, cvd, cvd_ema) values ($1,$2,$3)`,
-    [ENV.PRODUCT_ID, cvdRow.cvd ?? 0, cvdRow.cvd_ema ?? 0]
+    [ENV.PRODUCT_ID, row.cvd ?? 0, row.cvd_ema ?? 0]
   );
 }
 
-// --------------------- EXPRESS APP ---------------------
+/* -------------------------- Express app -------------------------- */
 const app = express();
-
-// Accept JSON or plain text (TV mobile sometimes posts text/plain)
+// TV mobile sometimes posts text/plain
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
 app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
 
-// ==============================
-// RETENTION (token-protected)
-// ==============================
+/* ------------------------- RETENTION (GET) ------------------------ */
+// token via header `X-Auth-Token` or query `?token=...`
 const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
-// call with:  GET /retention?token=YOUR_TOKEN
-// or send header: X-Auth-Token: YOUR_TOKEN
 
 app.get("/retention", async (req, res) => {
   const token = req.get("X-Auth-Token") || req.query.token || "";
@@ -226,126 +213,94 @@ app.get("/retention", async (req, res) => {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
-  // hardcoded table names (safe to template)
+  // use your canonical table names
   const plan = [
-    { table: "aplus_signals",  interval: "180 days" }, // keep compact A+ signals 6mo
-    { table: "aplus_events",   interval: "30 days"  }, // raw payloads 30d
-    { table: "dom_snapshots",  interval: "14 days"  }, // DOM snapshots 14d
-    { table: "cvd_ticks",      interval: "14 days"  }, // CVD ticks 14d
-    // optional: keep trade feedback forever. uncomment to prune:
-    // { table: "trade_feedback", interval: "180 days" },
+    { table: "aplus_signals", interval: "180 days" },
+    { table: "events",        interval: "30 days"  },
+    { table: "dom_snapshots", interval: "14 days"  },
+    { table: "cvd_ticks",     interval: "14 days"  },
+    // { table: "trade_feedback", interval: "180 days" }, // optional
   ];
-
-  const vacuums = [
-    "aplus_signals",
-    "aplus_events",
-    "dom_snapshots",
-    "cvd_ticks",
-    "trade_feedback",
-  ];
+  const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
 
   const result = { ok: true, deleted: {}, skipped: [], vacuumed: [] };
-  const client = await pgPool.connect();
+  const client = await pg.connect();
 
-  // helper: only delete if table exists
   async function safeDelete(t, interval) {
-    const exists = await client.query("SELECT to_regclass($1) reg", [t]);
+    const exists = await client.query("select to_regclass($1) reg", [t]);
     if (!exists.rows[0].reg) { result.skipped.push(t); return; }
-    const q = `DELETE FROM ${t} WHERE ts < NOW() - INTERVAL '${interval}'`;
-    const r = await client.query(q);
+    const r = await client.query(`delete from ${t} where ts < now() - interval '${interval}'`);
     result.deleted[t] = r.rowCount;
   }
-
-  // helper: only VACUUM if exists
   async function safeVacuum(t) {
-    const exists = await client.query("SELECT to_regclass($1) reg", [t]);
+    const exists = await client.query("select to_regclass($1) reg", [t]);
     if (!exists.rows[0].reg) return;
-    await client.query(`VACUUM ANALYZE ${t}`);
+    await client.query(`vacuum analyze ${t}`);
     result.vacuumed.push(t);
   }
 
   try {
-    await client.query("BEGIN");
-    // deletes
+    await client.query("begin");
     for (const { table, interval } of plan) await safeDelete(table, interval);
-    // vacuum (optional but nice)
     for (const t of vacuums) await safeVacuum(t);
-    await client.query("COMMIT");
+    await client.query("commit");
     console.log("[RETENTION] done:", result);
-    return res.json(result);
+    res.json(result);
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("rollback");
     console.error("[RETENTION] error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
   } finally {
     client.release();
   }
 });
 
-// ====================================
-// BACKUP (token-protected, gzipped JSON)
-// ====================================
-import zlib from "zlib"; // (top of file you likely already import; if not, keep this here)
-
+/* --------------------------- BACKUP (GET) ------------------------- */
+// gzipped JSON. Usage: /backup?token=TOKEN&days=30
 const BACKUP_TOKEN = process.env.BACKUP_TOKEN || "";
 
 app.get("/backup", async (req, res) => {
   try {
-    // Auth (either query token or header)
     const token = req.query.token || req.get("X-Auth-Token");
     if (!BACKUP_TOKEN || token !== BACKUP_TOKEN) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
-    // How many days to include (defaults to 30)
-    const days = Math.max(1, Math.min(365, parseInt(req.query.days || "30", 10)));
+    const days  = Math.max(1, Math.min(365, parseInt(req.query.days || "30", 10)));
+    const since = `now() - interval '${days} days'`;
 
-    // Time window
-    const since = `NOW() - INTERVAL '${days} days'`;
-
-    // Pull data per table (adjust list to match your schema)
-    // NOTE: trade_feedback kept forever; include all or make it windowed like others
     const tables = [
-      { name: "aplus_signals",   windowed: true,  ts: "ts" },
-      { name: "aplus_events",    windowed: true,  ts: "ts" },
-      { name: "dom_snapshots",   windowed: true,  ts: "ts" },
-      { name: "cvd_ticks",       windowed: true,  ts: "ts" },
-      { name: "trade_feedback",  windowed: false, ts: "ts" }, // full dump
+      { name: "aplus_signals", windowed: true,  ts: "ts" },
+      { name: "events",        windowed: true,  ts: "ts" },
+      { name: "dom_snapshots", windowed: true,  ts: "ts" },
+      { name: "cvd_ticks",     windowed: true,  ts: "ts" },
+      { name: "trade_feedback",windowed: false, ts: "ts" },
     ];
 
-    // Fetch counts first (cheap sanity)
     const counts = {};
     for (const t of tables) {
-      const where = t.windowed ? `WHERE ${t.ts} >= ${since}` : "";
-      const { rows } = await pool.query(`SELECT COUNT(*)::int AS c FROM ${t.name} ${where}`);
+      const where = t.windowed ? `where ${t.ts} >= ${since}` : "";
+      const { rows } = await pg.query(`select count(*)::int as c from ${t.name} ${where}`);
       counts[t.name] = rows[0].c;
     }
 
-    // Pull rows
-    const payload = { meta: {
-        generated_at: new Date().toISOString(),
-        days,
-        counts
-      },
-      data: {}
-    };
-
+    const payload = { meta: { generated_at: new Date().toISOString(), days, counts }, data: {} };
     for (const t of tables) {
-      const where = t.windowed ? `WHERE ${t.ts} >= ${since}` : "";
-      // Keep order stable by timestamp if present
-      const order = t.ts ? `ORDER BY ${t.ts} ASC` : "";
-      const { rows } = await pool.query(`SELECT * FROM ${t.name} ${where} ${order}`);
+      const where = t.windowed ? `where ${t.ts} >= ${since}` : "";
+      const order = t.ts ? `order by ${t.ts} asc` : "";
+      const { rows } = await pg.query(`select * from ${t.name} ${where} ${order}`);
       payload.data[t.name] = rows;
     }
 
-    // Gzip + send
     const raw = Buffer.from(JSON.stringify(payload), "utf8");
-    const gz = zlib.gzipSync(raw);
+    const gz  = zlib.gzipSync(raw);
 
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Encoding", "gzip");
-    res.setHeader("Content-Disposition",
-      `attachment; filename="backup_${new Date().toISOString().replace(/[:.]/g, "-")}.json.gz"`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="backup_${new Date().toISOString().replace(/[:.]/g, "-")}.json.gz"`
+    );
     res.status(200).send(gz);
   } catch (err) {
     console.error("[BACKUP] error:", err);
@@ -353,158 +308,48 @@ app.get("/backup", async (req, res) => {
   }
 });
 
-// ========================================
-// BACKUP STATUS CHECK ENDPOINT
-// ========================================
+/* -------------------- BACKUP STATUS (DB-based) -------------------- */
+// For cron monitoring: /backup/check?token=BACKUP_TOKEN
 app.get("/backup/check", async (req, res) => {
   try {
     const token = req.get("X-Auth-Token") || req.query.token;
-    if (!process.env.BACKUP_TOKEN || token !== process.env.BACKUP_TOKEN) {
-      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    if (!BACKUP_TOKEN || token !== BACKUP_TOKEN) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
     }
-
-    // Replace with wherever you store backup files
-    const backupDir = path.join(__dirname, "backups");
-    const files = await fs.promises.readdir(backupDir);
-
-    if (files.length === 0) {
-      return res.status(500).json({ ok: false, error: "No backups found" });
+    const tables = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks"];
+    const summary = {};
+    for (const t of tables) {
+      const { rows: c } = await pg.query(`select count(*)::int as n from ${t}`);
+      const { rows: m } = await pg.query(`select coalesce(max(ts),'1970-01-01'::timestamptz) as max_ts from ${t}`);
+      summary[t] = { rows: c[0].n, latest: m[0].max_ts };
     }
-
-    // Sort by latest modified
-    const latest = files
-      .map(file => ({
-        name: file,
-        path: path.join(backupDir, file),
-      }))
-      .sort((a, b) => fs.statSync(b.path).mtime - fs.statSync(a.path))
-      [0];
-
-    const stats = await fs.promises.stat(latest.path);
-    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-
-    res.json({
-      ok: true,
-      latestBackup: latest.name,
-      sizeMB: `${sizeMB} MB`,
-      modifiedAt: stats.mtime,
-    });
+    res.json({ ok: true, generated_at: new Date().toISOString(), summary });
   } catch (err) {
-    console.error("[BACKUP CHECK ERROR]", err);
-    res.status(500).json({ ok: false, error: "Unable to check backups" });
-  }
-});
-
-// ====================================
-// RETENTION ENDPOINT (secure)
-// ====================================
-app.post("/internal/retention", async (req, res) => {
-  try {
-    const tokenHeader = req.headers["x-retention-token"];
-    const tokenQuery  = req.query.token;
-    const token = tokenHeader || tokenQuery || "";
-
-    if (process.env.RETENTION_TOKEN && token !== process.env.RETENTION_TOKEN) {
-      return res.status(401).json({ error: "unauthorized" });
-    }
-
-    // Prune windows (adjust if you like)
-    const DOM_DAYS  = parseInt(process.env.RETENTION_DOM_DAYS  || "30", 10);   // DOM for 30d
-    const CVD_DAYS  = parseInt(process.env.RETENTION_CVD_DAYS  || "30", 10);   // CVD for 30d
-    const APL_DAYS  = parseInt(process.env.RETENTION_APLUS_DAYS|| "180", 10);  // A+ for 180d
-
-    // Run deletes and capture counts
-    const domDel = await pool.query(
-      "DELETE FROM dom_ticks WHERE ts < NOW() - INTERVAL $1 DAY",
-      [DOM_DAYS]
-    );
-    const cvdDel = await pool.query(
-      "DELETE FROM cvd_ticks WHERE ts < NOW() - INTERVAL $1 DAY",
-      [CVD_DAYS]
-    );
-    const aplDel = await pool.query(
-      "DELETE FROM aplus_events WHERE ts < NOW() - INTERVAL $1 DAY",
-      [APL_DAYS]
-    );
-
-    // Light analyze to keep plans fresh
-    await pool.query("ANALYZE dom_ticks");
-    await pool.query("ANALYZE cvd_ticks");
-    await pool.query("ANALYZE aplus_events");
-
-    const out = {
-      pruned: {
-        dom_ticks: domDel.rowCount || 0,
-        cvd_ticks: cvdDel.rowCount || 0,
-        aplus_events: aplDel.rowCount || 0,
-      },
-      at: new Date().toISOString(),
-    };
-    console.log("[RETENTION]", out);
-    res.json({ ok: true, ...out });
-  } catch (err) {
-    console.error("[RETENTION] error:", err.message);
+    console.error("[BACKUP CHECK] error:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ====================================
-// KEEP RENDER SERVICE ALWAYS AWAKE
-// ====================================
-const PORT = Number(process.env.PORT || 10000);
-
-// Prefer explicit env (best)
-const EXTERNAL = process.env.KEEPALIVE_URL ||
-  (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}/health` : null);
-
-// Local fallback (doesn't help Render's idle policy, but avoids noisy logs if external is flaky)
-const LOCAL = `http://127.0.0.1:${PORT}/health`;
-
-let kaFails = 0;
-const jitter = () => 90000 + Math.floor(Math.random() * 30000); // 90–120s
-
-async function ping(url) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 5000);
-  try {
-    const res = await fetch(url, { method: "GET", cache: "no-store", signal: ac.signal });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return true;
-  } catch (e) {
-    clearTimeout(t);
-    return false;
-  }
-}
-
-if (EXTERNAL) {
-  console.log(`[KEEPALIVE] Using external ${EXTERNAL}, fallback ${LOCAL}`);
-  setInterval(async () => {
-    const okExt = await ping(EXTERNAL);
-    if (okExt) {
-      if (kaFails) console.log("[KEEPALIVE] Recovered");
-      kaFails = 0;
-      return;
-    }
-    // try local once before counting it as a fail (just to reduce red noise)
-    const okLocal = await ping(LOCAL);
-    if (!okLocal) {
-      kaFails++;
-      if (kaFails >= 2) console.warn(`[KEEPALIVE] ${kaFails} consecutive failures`);
-    }
-  }, jitter()); // every ~1.5–2 minutes with jitter
-} else {
-  console.log("[KEEPALIVE] Skipped (no EXTERNAL URL available)");
-}
-
-// Health
-app.get("/", (_req, res) => res.status(200).send("APlus pipeline up"));
+/* ---------------- Health + Keepalive ---------------- */
+app.get("/",        (_req, res) => res.status(200).send("APlus pipeline up"));
 app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
+app.get("/health",  (_req, res) => res.status(200).json({ ok: true })); // keepalive target
 
-// ------------ Single TradingView webhook: /aplus ------------
+const KEEPALIVE_URL =
+  process.env.KEEPALIVE_URL ||
+  (process.env.RENDER_EXTERNAL_URL
+    ? `https://${process.env.RENDER_EXTERNAL_URL}/health`
+    : `http://127.0.0.1:${ENV.PORT}/health`);
+
+console.log(`[KEEPALIVE] Using ${KEEPALIVE_URL}`);
+setInterval(() => {
+  fetch(KEEPALIVE_URL, { cache: "no-store" }).catch(() => {});
+}, 240000); // every 4 minutes
+
+/* ---------------- TradingView webhook: /aplus ---------------- */
 app.post("/aplus", async (req, res) => {
   try {
-    // Shared secret guard (optional)
+    // Optional shared secret
     if (ENV.TV_API_KEY) {
       const got = req.headers["x-tv-key"];
       if (!got || got !== ENV.TV_API_KEY) {
@@ -513,28 +358,19 @@ app.post("/aplus", async (req, res) => {
       }
     }
 
-    // TV sends JSON or raw string (esp. if Alert “Message” is empty on mobile)
-    let raw = req.body;
-    let parsed = null;
-
+    // TV sends JSON or raw string
+    let raw = req.body, parsed = null;
     if (typeof raw === "string") {
       const s = raw.trim();
-      if (s.startsWith("{") && s.endsWith("}")) {
-        try { parsed = JSON.parse(s); } catch { parsed = null; }
-      }
-    } else if (raw && typeof raw === "object") {
-      parsed = raw;
-    }
+      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
+    } else if (raw && typeof raw === "object") parsed = raw;
 
-    // Store raw event for audit
     await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
 
-    // If payload looks like compact APlus, also store to aplus_signals
-    if (parsed && parsed.type === "APlus") {
-      await persistAPlus(parsed);
-    }
+    // If compact A+ shape, persist to aplus_signals
+    if (parsed && parsed.type === "APlus") await persistAPlus(parsed);
 
-    // Optionally relay to Zapier
+    // Optional Zapier relay
     if (ENV.ZAP_B_URL) {
       try {
         const zr = await fetch(ENV.ZAP_B_URL, {
@@ -562,22 +398,22 @@ app.post("/aplus", async (req, res) => {
       }
     }
 
-    return res.json({ ok: true });
+    res.json({ ok: true });
   } catch (e) {
     console.error("❌ /aplus error:", e.message);
     await persistEvent("audit", { err: e.message }, "aplus-handler-error");
-    return res.status(500).json({ error: "server_error" });
+    res.status(500).json({ error: "server_error" });
   }
 });
 
-// ------------------------ RETENTION ------------------------
+/* ---------------- Nightly prune (server-side) ---------------- */
 async function pruneOld() {
   const days = ENV.PRUNE_DAYS;
   try {
-    const q1 = await pg.query(`delete from events where ts < now() - interval '${days} days'`);
+    const q1 = await pg.query(`delete from events        where ts < now() - interval '${days} days'`);
     const q2 = await pg.query(`delete from aplus_signals where ts < now() - interval '${days} days'`);
     const q3 = await pg.query(`delete from dom_snapshots where ts < now() - interval '${days} days'`);
-    const q4 = await pg.query(`delete from cvd_ticks where ts < now() - interval '${days} days'`);
+    const q4 = await pg.query(`delete from cvd_ticks     where ts < now() - interval '${days} days'`);
     console.log(`🧹 Prune(${days}d): events=${q1.rowCount}, aplus=${q2.rowCount}, dom=${q3.rowCount}, cvd=${q4.rowCount}`);
     await persistEvent("prune", { days, counts: {
       events: q1.rowCount, aplus: q2.rowCount, dom: q3.rowCount, cvd: q4.rowCount
@@ -587,10 +423,9 @@ async function pruneOld() {
     await persistEvent("audit", { err: e.message }, "prune-error");
   }
 }
-// Nightly-ish (every 24h)
 setInterval(pruneOld, 24 * 60 * 60 * 1000);
 
-// --------------------- CRONITOR PING ---------------------
+/* ---------------- Cronitor ping (optional) ---------------- */
 async function pingCronitor() {
   if (!ENV.CRONITOR_URL) return;
   try {
@@ -602,7 +437,48 @@ async function pingCronitor() {
 }
 setInterval(pingCronitor, 15_000);
 
-// ------------------- START + SHUTDOWN -------------------
+/* --------------- Internal retention (POST variant) --------------- */
+// Endpoint you had before (kept for compatibility):
+// POST /internal/retention?token=RETENTION_TOKEN
+app.post("/internal/retention", async (req, res) => {
+  try {
+    const tokenHeader = req.headers["x-retention-token"];
+    const tokenQuery  = req.query.token;
+    const token = (tokenHeader || tokenQuery || "").toString();
+
+    if (process.env.RETENTION_TOKEN && token !== process.env.RETENTION_TOKEN) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const DOM_DAYS = parseInt(process.env.RETENTION_DOM_DAYS  || "30", 10);
+    const CVD_DAYS = parseInt(process.env.RETENTION_CVD_DAYS  || "30", 10);
+    const APL_DAYS = parseInt(process.env.RETENTION_APLUS_DAYS|| "180", 10);
+
+    const domDel = await pg.query(`delete from dom_snapshots where ts < now() - interval '${DOM_DAYS} days'`);
+    const cvdDel = await pg.query(`delete from cvd_ticks     where ts < now() - interval '${CVD_DAYS} days'`);
+    const aplDel = await pg.query(`delete from events        where ts < now() - interval '${APL_DAYS} days'`);
+
+    await pg.query("analyze dom_snapshots");
+    await pg.query("analyze cvd_ticks");
+    await pg.query("analyze events");
+
+    const out = {
+      pruned: {
+        dom_snapshots: domDel.rowCount || 0,
+        cvd_ticks: cvdDel.rowCount || 0,
+        events: aplDel.rowCount || 0,
+      },
+      at: new Date().toISOString(),
+    };
+    console.log("[RETENTION/POST]", out);
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    console.error("[RETENTION/POST] error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* ---------------- Start + graceful shutdown ---------------- */
 let server;
 (async function start() {
   try {
@@ -634,14 +510,14 @@ async function shutdown(sig) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT",  () => shutdown("SIGINT"));
 
-// index.js — Full pipeline (Part 2/2)
+// index.js — APlus pipeline (Part 3/3)
 import WebSocket from "ws";
 
-// ---------- DOM POLLER (Coinbase level=2) ----------
-const DOM_POLL_MS = Math.max(2000, parseInt(process.env.DOM_POLL_MS || "6000", 10));
-const PRODUCT_ID  = process.env.PRODUCT_ID || "BTC-USD";
-const ZAP_DOM_URL = process.env.ZAP_DOM_URL || "";
-const ZAP_DOM_API_KEY = process.env.ZAP_DOM_API_KEY || "";
+/* ---------------------- DOM POLLER (REST) ---------------------- */
+const DOM_POLL_MS = ENV.DOM_POLL_MS;
+const PRODUCT_ID  = ENV.PRODUCT_ID;
+const ZAP_DOM_URL = ENV.ZAP_DOM_URL;
+const ZAP_DOM_API_KEY = ENV.ZAP_DOM_API_KEY;
 
 async function fetchDOM() {
   try {
@@ -674,20 +550,6 @@ async function domTick() {
   const row = await fetchDOM();
   if (!row) return;
 
-  // persist to DB (events + dom_snapshots)
-  try {
-    // reuse top-level helpers via globalThis (simple bridge)
-    if (!globalThis._persistEvent || !globalThis._persistDOM) {
-      // Lazy wire-ins: copy from module scope if not already set
-      globalThis._persistEvent = async (k, p, n) => {
-        // dynamic import is heavy; instead we stashed real fns in globals (below)
-      };
-      globalThis._persistDOM = async (_row) => {};
-    }
-  } catch {}
-
-  // We stored actual functions on globalThis right after their declarations:
-  // (placed below definitions in Part 1/2)
   try {
     await globalThis._persistEvent("dom", row, "poll");
     await globalThis._persistDOM(row);
@@ -695,7 +557,7 @@ async function domTick() {
     console.warn("DOM persist error:", e.message);
   }
 
-  // Optional fan-out to an external DOM endpoint (legacy)
+  // Optional fan-out
   if (ZAP_DOM_URL) {
     try {
       const zr = await fetch(ZAP_DOM_URL, {
@@ -715,8 +577,8 @@ async function domTick() {
 setInterval(domTick, DOM_POLL_MS);
 console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
 
-// ---------- CVD WS (Coinbase matches) + EMA ----------
-const CVD_EMA_LEN = Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10));
+/* ------------------- CVD via WS + EMA heartbeat ------------------- */
+const CVD_EMA_LEN = ENV.CVD_EMA_LEN;
 const alpha = 2 / (CVD_EMA_LEN + 1);
 
 let ws = null;
@@ -742,10 +604,9 @@ function startCVD() {
       try {
         const msg = JSON.parse(buf.toString());
         if (msg.type === "match" && msg.product_id === PRODUCT_ID) {
-          const size = parseFloat(msg.size || "0");
-          const side = msg.side; // "buy" | "sell"
+          const size  = parseFloat(msg.size || "0");
+          const side  = msg.side; // "buy" | "sell"
           const signed = side === "buy" ? size : side === "sell" ? -size : 0;
-
           cvd += signed;
           cvdEma = cvdEma === 0 ? cvd : alpha * cvd + (1 - alpha) * cvdEma;
         }
@@ -765,12 +626,11 @@ function startCVD() {
       try { ws.close(); } catch {}
     });
   }
-
   connect();
 }
 startCVD();
 
-// Heartbeat persist every 15s
+// Persist CVD heartbeat every 15s
 setInterval(async () => {
   const row = {
     type: "cvd",
@@ -778,7 +638,6 @@ setInterval(async () => {
     cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
     cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
   };
-
   try {
     await globalThis._persistEvent("cvd", row, "ws-heartbeat");
     await globalThis._persistCVD({ cvd: row.cvd, cvd_ema: row.cvd_ema });
@@ -789,17 +648,262 @@ setInterval(async () => {
 
 console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
 
-// ---------- Wire DB helpers to globalThis (bridge) ----------
-// This lets Part 2 call the Part 1 functions without re-importing.
-globalThis._persistEvent = async (kind, payload, note) => {
-  // eslint-disable-next-line no-undef
-  return persistEvent(kind, payload, note); // defined in Part 1 scope
-};
-globalThis._persistDOM = async (row) => {
-  // eslint-disable-next-line no-undef
-  return persistDOM(row); // defined in Part 1 scope
-};
-globalThis._persistCVD = async (row) => {
-  // eslint-disable-next-line no-undef
-  return persistCVD(row); // defined in Part 1 scope
-};
+/* ---------------- Bridge helpers to Part 1 ---------------- */
+globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
+globalThis._persistDOM   = async (row) => persistDOM(row);
+globalThis._persistCVD   = async (row) => persistCVD(row);
+
+/* =====================================================================
+   ADD-ONS: legacy /dom ingest, admin/test endpoints, simple metrics
+   These are optional but helpful for debugging and feature parity.
+   ===================================================================== */
+
+/* ---------------- Legacy DOM ingest (external poster) ---------------
+   Accepts POSTed DOM snapshots (for old pipelines or third-party sources).
+   Guarded by Zap API key if provided.
+   Body can be JSON:
+     { p_bid, q_bid, p_ask, q_ask, sequence, ts? }
+--------------------------------------------------------------------- */
+app.post("/dom", async (req, res) => {
+  try {
+    // Optional guard via ZAP_API_KEY
+    if (ENV.ZAP_API_KEY) {
+      const got = req.headers["x-api-key"];
+      if (!got || got !== ENV.ZAP_API_KEY) {
+        await persistEvent("audit", { route: "/dom", reason: "unauthorized" }, "dom-guard-fail");
+        return res.status(401).json({ error: "unauthorized" });
+      }
+    }
+
+    let raw = req.body, parsed = null;
+    if (typeof raw === "string") {
+      const s = raw.trim();
+      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
+    } else if (raw && typeof raw === "object") parsed = raw;
+
+    const dom = parsed || {};
+    const row = {
+      type: "dom",
+      ts: dom.ts || new Date().toISOString(),
+      p_bid: Number.isFinite(+dom.p_bid) ? +dom.p_bid : null,
+      q_bid: Number.isFinite(+dom.q_bid) ? +dom.q_bid : null,
+      p_ask: Number.isFinite(+dom.p_ask) ? +dom.p_ask : null,
+      q_ask: Number.isFinite(+dom.q_ask) ? +dom.q_ask : null,
+      sequence: Number.isFinite(+dom.sequence) ? +dom.sequence : null,
+    };
+
+    await persistEvent("dom", row, "external");
+    await persistDOM(row);
+
+    return res.json({ ok: true, stored: row });
+  } catch (e) {
+    console.error("❌ /dom error:", e.message);
+    await persistEvent("audit", { err: e.message }, "dom-handler-error");
+    return res.status(500).json({ error: "server_error" });
+  }
+});
+
+
+/* ---------------------- A+ test injector ----------------------------
+   Create a synthetic compact A+ payload so you can verify end-to-end:
+   POST /aplus/test
+   Headers: x-tv-key must match TV_API_KEY if it’s set.
+   Optional body JSON to override fields (s, f, d, p, sc, sr, R).
+--------------------------------------------------------------------- */
+app.post("/aplus/test", async (req, res) => {
+  try {
+    if (ENV.TV_API_KEY) {
+      const got = req.headers["x-tv-key"];
+      if (!got || got !== ENV.TV_API_KEY) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+    }
+    const now = Date.now();
+    const body = (typeof req.body === "object" && req.body) || {};
+
+    const sample = {
+      type: "APlus",
+      s: body.s ?? ENV.PRODUCT_ID,
+      t: body.t ?? now,
+      f: body.f ?? "15",
+      p: body.p ?? 50000,
+      d: body.d ?? "LONG",
+      e: body.e ?? "APlus",
+      sc: body.sc ?? 77,
+      sr: body.sr ?? false,
+      R: body.R ?? "SCORE|MODE",
+    };
+
+    await persistEvent("aplus", sample, "aplus-test");
+    await persistAPlus(sample);
+
+    // Optional relay
+    if (ENV.ZAP_B_URL) {
+      try {
+        const zr = await fetch(ENV.ZAP_B_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+            "x-pipe-tag": "aplus-test",
+          },
+          body: JSON.stringify({ tag: "aplus-test", product: ENV.PRODUCT_ID, payload: sample, ts: new Date().toISOString() }),
+        });
+        if (!zr.ok) {
+          const txt = await zr.text().catch(() => "");
+          console.warn("⚠️ Zap relay non-200 (test):", zr.status, txt);
+          await persistEvent("audit", { status: zr.status, txt }, "zap-non200-test");
+        }
+      } catch (e) {
+        console.warn("⚠️ Zap relay error (test):", e.message);
+        await persistEvent("audit", { err: e.message }, "zap-error-test");
+      }
+    }
+
+    return res.json({ ok: true, injected: sample });
+  } catch (e) {
+    console.error("❌ /aplus/test error:", e.message);
+    await persistEvent("audit", { err: e.message }, "aplus-test-error");
+    return res.status(500).json({ error: "server_error" });
+  }
+});
+
+
+/* ---------------------- Recent data peeks ---------------------------
+   Quick paginated “tail” views for sanity checks in a browser.
+   - GET /events/recent?limit=100
+   - GET /dom/latest?limit=50
+   - GET /cvd/latest?limit=100
+   - GET /aplus/latest?limit=50
+--------------------------------------------------------------------- */
+function clampInt(v, def, min, max) {
+  const n = parseInt(v ?? def, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
+app.get("/events/recent", async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit, 100, 1, 1000);
+    const { rows } = await pg.query(`select id, ts, kind, product, note, payload from events order by ts desc limit $1`, [limit]);
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/dom/latest", async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit, 50, 1, 1000);
+    const { rows } = await pg.query(`select * from dom_snapshots order by ts desc limit $1`, [limit]);
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/cvd/latest", async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit, 100, 1, 5000);
+    const { rows } = await pg.query(`select * from cvd_ticks order by ts desc limit $1`, [limit]);
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/aplus/latest", async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit, 50, 1, 1000);
+    const { rows } = await pg.query(`select * from aplus_signals order by ts desc limit $1`, [limit]);
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+/* -------------------------- Zap test hook ---------------------------
+   POST /zap/test  (sends a tiny ping to ZAP_B_URL if set)
+   Headers: x-api-key required if you set ZAP_API_KEY in env.
+--------------------------------------------------------------------- */
+app.post("/zap/test", async (req, res) => {
+  try {
+    if (!ENV.ZAP_B_URL) return res.status(400).json({ ok: false, error: "ZAP_B_URL not set" });
+
+    if (ENV.ZAP_API_KEY) {
+      const got = req.headers["x-api-key"];
+      if (!got || got !== ENV.ZAP_API_KEY) {
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+    }
+
+    const payload = { hello: "zap", ts: new Date().toISOString(), product: ENV.PRODUCT_ID };
+    const r = await fetch(ENV.ZAP_B_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+        "x-pipe-tag": "zap-test",
+      },
+      body: JSON.stringify({ tag: "zap-test", payload }),
+    });
+
+    const ok = r.ok;
+    const txt = await r.text().catch(() => "");
+    if (!ok) await persistEvent("audit", { status: r.status, txt }, "zap-test-non200");
+    res.json({ ok, status: r.status, body: txt.slice(0, 400) });
+  } catch (e) {
+    await persistEvent("audit", { err: e.message }, "zap-test-error");
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+/* ----------------------------- Metrics ------------------------------
+   GET /metrics/simple
+   Lightweight counts + freshest timestamps (no Prometheus).
+--------------------------------------------------------------------- */
+app.get("/metrics/simple", async (_req, res) => {
+  try {
+    const q = async (sql) => (await pg.query(sql)).rows[0];
+    const m = {
+      events:        await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from events`),
+      aplus_signals: await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from aplus_signals`),
+      dom_snapshots: await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from dom_snapshots`),
+      cvd_ticks:     await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from cvd_ticks`),
+    };
+    res.json({ ok: true, generated_at: new Date().toISOString(), metrics: m });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+/* -------------------------- Env inspector ---------------------------
+   GET /env (sanitized) – for debugging only. Hides secrets.
+--------------------------------------------------------------------- */
+app.get("/env", (_req, res) => {
+  try {
+    const hide = (v) => (v ? "***" : "");
+    res.json({
+      ok: true,
+      env: {
+        PRODUCT_ID: ENV.PRODUCT_ID,
+        TV_API_KEY: hide(ENV.TV_API_KEY),
+        ZAP_B_URL: !!ENV.ZAP_B_URL,
+        ZAP_API_KEY: hide(ENV.ZAP_API_KEY),
+        ZAP_DOM_URL: !!ENV.ZAP_DOM_URL,
+        ZAP_DOM_API_KEY: hide(ENV.ZAP_DOM_API_KEY),
+        DOM_POLL_MS: ENV.DOM_POLL_MS,
+        CVD_EMA_LEN: ENV.CVD_EMA_LEN,
+        PRUNE_DAYS: ENV.PRUNE_DAYS,
+        CRONITOR_URL: !!ENV.CRONITOR_URL,
+        PG_MODE: (ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE) ? "fields" : (ENV.DATABASE_URL ? "url" : "none"),
+        PORT: ENV.PORT,
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
