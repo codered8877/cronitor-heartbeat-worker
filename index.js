@@ -149,27 +149,24 @@ async function dbInit() {
     );
   `);
 
-  await pg.query(`
+// --- Trade feedback: ensure table, columns, and indexes
+await pg.query(`
   create table if not exists trade_feedback (
-    id         bigserial primary key,
-    ts         timestamptz not null default now(),
-    signal_id  bigint,              -- optional FK to aplus_signals.id
-    outcome    text,                -- e.g., 'WIN' | 'LOSS' | 'BE'
-    rr         double precision,    -- realized risk-reward
-    notes      text
+    id bigserial primary key,
+    ts timestamptz not null default now()
   );
 `);
-await pg.query(`create index if not exists idx_feedback_ts on trade_feedback(ts desc)`);
-await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
 
-  // ensure columns exist on legacy tables before creating indexes
 await pg.query(`
   alter table if exists trade_feedback
-    add column if not exists signal_id  bigint,
-    add column if not exists outcome    text,
-    add column if not exists rr         double precision,
-    add column if not exists notes      text
+    add column if not exists signal_id bigint,
+    add column if not exists outcome   text,
+    add column if not exists rr        double precision,
+    add column if not exists notes     text
 `);
+
+await pg.query(`create index if not exists idx_feedback_ts     on trade_feedback(ts desc)`);
+await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
   
   // Indexes
   await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
