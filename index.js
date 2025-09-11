@@ -515,6 +515,7 @@ if (ENABLE_TEST_ROUTES) {
     res.status(500).json({ error: e.message });
   }
 });
+}
     
     // TV sends JSON or raw string
     let raw = req.body, parsed = null;
