@@ -91,6 +91,8 @@ function buildPgConfig() {
 }
 const pg = new Pool(buildPgConfig());
 
+const ENABLE_TEST_ROUTES = process.env.ENABLE_TEST_ROUTES === "1";
+
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
@@ -481,7 +483,8 @@ app.post("/aplus", async (req, res) => {
    Temporary GET endpoint so we can test directly via browser.
    Visit: /aplus/sample?key=YOUR_API_KEY
 ------------------------------------------------------------------------ */
-app.get("/aplus/sample", async (req, res) => {
+if (ENABLE_TEST_ROUTES) {
+    app.get("/aplus/sample", async (req, res) => {
   try {
     if (ENV.TV_API_KEY) {
       const got = req.query.key || req.get("x-tv-key");
@@ -559,7 +562,7 @@ app.get("/aplus/sample", async (req, res) => {
     await persistEvent("audit", { err: e.message }, "aplus-handler-error");
     res.status(500).json({ error: "server_error" });
   }
-});
+});}
 
 /* ---------------- Nightly prune (server-side) ---------------- */
 async function pruneOld() {
