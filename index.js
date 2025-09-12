@@ -618,47 +618,17 @@ app.post("/aplus", async (req, res) => {
       return res.status(202).json({ ok: true, skipped: "cooldown" });
     }
 
-    // ---- 3) DOM & CVD checks (freshness + logic alignment)
-    const [domQ, cvdQ] = await Promise.all([
-      pg.query(`select * from dom_snapshots order by ts desc limit 1`),
-      pg.query(`select * from cvd_ticks     order by ts desc limit 1`),
-    ]);
-    const dom = domQ.rows[0] || null;
-    const cvd = cvdQ.rows[0] || null;
+    // ---- 3) DOM & CVD checks (freshness + logic alignment via helper)
+const gate = await gateDomCvd(parsed);
 
-    const nowMs = Date.now();
+console.log("[/aplus] gate check:", gate.details);
 
-    const domFreshOk =
-      !!dom && dom.ts && (nowMs - new Date(dom.ts).getTime() <= ENV.MAX_DOM_AGE_MS);
+if (!gate.ok) {
+  await persistEvent("audit", { route: "/aplus", gate: gate.details }, "dom-cvd-skip");
+  return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
+}
 
-    const domSpreadOk =
-      !!dom && Number.isFinite(dom.p_bid) && Number.isFinite(dom.p_ask) && dom.p_ask > dom.p_bid;
-
-    const cvdFreshOk =
-      !!cvd && cvd.ts && (nowMs - new Date(cvd.ts).getTime() <= ENV.MAX_CVD_AGE_MS);
-
-    const dir = String(parsed.d).toUpperCase();
-    const cvdDirOk =
-      !!cvd && (dir === "LONG" ? cvd.cvd_ema > 0 : dir === "SHORT" ? cvd.cvd_ema < 0 : true);
-
-    const gateOk = domFreshOk && domSpreadOk && cvdFreshOk && cvdDirOk;
-
-    console.log("[/aplus] gate check:",
-      { dir, domFreshOk, domSpreadOk, cvdFreshOk, cvdDirOk, domRow: dom, cvdRow: cvd }
-    );
-
-    if (!gateOk) {
-      await persistEvent("audit", {
-        route: "/aplus",
-        gate: { dir, domFreshOk, domSpreadOk, cvdFreshOk, cvdDirOk,
-                dom_age_ms: dom?.ts ? nowMs - new Date(dom.ts).getTime() : null,
-                cvd_age_ms: cvd?.ts ? nowMs - new Date(cvd.ts).getTime() : null,
-                cvd_ema: cvd?.cvd_ema ?? null }
-      }, "dom-cvd-skip");
-      return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
-    }
-
-    await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null }, "dom-cvd-cleared");
+await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir: gate.details.dir, cvd_ema: gate.details.cvd_ema }, "dom-cvd-cleared");
 
     // ---- 4) Persist A+ signal, then optional Zapier relay
     await persistAPlus(parsed);
