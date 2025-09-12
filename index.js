@@ -225,6 +225,50 @@ async function persistCVD(row) {
   );
 }
 
+// ---------- A+ validation & cooldown helpers ----------
+function isFiniteNum(n) { return Number.isFinite(+n); }
+
+function validateAPlus(p) {
+  if (!p || p.type !== "APlus") return { ok:false, reason:"not APlus" };
+  if (!p.s) return { ok:false, reason:"missing symbol" };
+  if (!p.d || !["LONG","SHORT"].includes(String(p.d).toUpperCase())) return { ok:false, reason:"bad dir" };
+  if (!isFiniteNum(p.p)) return { ok:false, reason:"bad price" };
+  if (ENV.MIN_SCORE && !isFiniteNum(p.sc)) return { ok:false, reason:"missing score" };
+  if (ENV.MIN_SCORE && +p.sc < ENV.MIN_SCORE) return { ok:false, reason:"score<threshold" };
+
+  // freshness check using payload timestamp t (ms epoch or ISO)
+  if (p.t) {
+    const tms = typeof p.t === "number" ? p.t : Date.parse(p.t);
+    if (Number.isFinite(tms) && (Date.now() - tms > ENV.MAX_AGE_MS)) {
+      return { ok:false, reason:"stale payload" };
+    }
+  }
+
+  // optional strict symbol match to PRODUCT_ID
+  if (ENV.PRODUCT_ID && String(p.s).toUpperCase() !== String(ENV.PRODUCT_ID).toUpperCase()) {
+    return { ok:false, reason:"symbol!=PRODUCT_ID" };
+  }
+  return { ok:true };
+}
+
+// DB-backed duplicate/cooldown (same dir & ~same price within COOLDOWN_SEC)
+async function isDupeOrCooling(p) {
+  const cooldown = Math.max(0, ENV.COOLDOWN_SEC);
+  if (!cooldown) return false;
+  const epsilon = Math.max(0, (+p.p || 0) * 0.0001); // ~1bp tolerance
+  const { rows } = await pg.query(
+    `select 1
+       from aplus_signals
+      where product = $1
+        and dir = $2
+        and ts >= now() - interval '${cooldown} seconds'
+        and price between $3 and $4
+      limit 1`,
+    [ENV.PRODUCT_ID, String(p.d).toUpperCase(), +p.p - epsilon, +p.p + epsilon]
+  );
+  return rows.length > 0;
+}
+
 /* -------------------------- Express app -------------------------- */
 const app = express();
 // TV mobile sometimes posts text/plain
