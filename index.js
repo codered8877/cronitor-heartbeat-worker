@@ -531,148 +531,119 @@ app.post("/aplus", async (req, res) => {
     }
 
     // TV sends JSON or raw string
-let raw = req.body, parsed = null;
+    let raw = req.body, parsed = null;
 
-// Immediately after: preview raw (trim if too long)
-const rawPreview =
-  typeof raw === "string" ? raw.slice(0, 500) : raw;
-console.log("[/aplus] raw body:", rawPreview);
+    // Immediately after: preview raw (trim if too long)
+    const rawPreview = typeof raw === "string" ? raw.slice(0, 500) : raw;
+    console.log("[/aplus] raw body:", rawPreview);
 
-// Parse raw → parsed
-if (typeof raw === "string") {
-  const s = raw.trim();
-  if (s.startsWith("{") && s.endsWith("}")) {
-    try { parsed = JSON.parse(s); } catch {}
-  }
-} else if (raw && typeof raw === "object") {
-  parsed = raw;
-}
-
-// AFTER parsing: log parsed object
-const parsedPreview = JSON.stringify(parsed);
-console.log("[/aplus] parsed:", parsedPreview);
-
-// Always log receipt to DB
-await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
-
-// ----- DOM / CVD gate (only for compact APlus)
-if (parsed && parsed.type === "APlus") {
-  const dir = (parsed.d || "").toUpperCase();
-
-  console.log("[/aplus] entering DOM/CVD gate:",
-    "dir=", dir,
-    "price=", parsed.p,
-    "score=", parsed.sc
-  );
-
-  // pull latest DOM & CVD rows
-  const domQ = await pg.query(`select * from dom_snapshots order by ts desc limit 1`);
-  const cvdQ = await pg.query(`select * from cvd_ticks     order by ts desc limit 1`);
-  const dom = domQ.rows[0] || null;
-  const cvd = cvdQ.rows[0] || null;
-
-  // Gate: valid DOM + spread positive; CVD EMA agrees with direction
-  const domOk =
-    !!dom &&
-    Number.isFinite(dom.p_bid) &&
-    Number.isFinite(dom.p_ask) &&
-    dom.p_ask > dom.p_bid;
-
-  const cvdOk =
-    !!cvd &&
-    (dir === "LONG"  ? cvd.cvd_ema > 0
-     : dir === "SHORT" ? cvd.cvd_ema < 0
-     : true);
-
-  console.log("[/aplus] gate check:",
-    "dir=", dir,
-    "domOk=", domOk,
-    "cvdOk=", cvdOk,
-    "domRow=", dom,
-    "cvdRow=", cvd
-  );
-
-  if (!domOk || !cvdOk) {
-    await persistEvent("audit", { route: "/aplus", gate: { domOk, cvdOk, dir, cvd_ema: cvd?.cvd_ema ?? null } }, "dom-cvd-skip");
-    return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
-  }
-
-  await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null }, "dom-cvd-cleared");
-
-  // persist compact A+ signal
-  await persistAPlus(parsed);
-
-  // optional Zapier relay
-  if (ENV.ZAP_B_URL) {
-    try {
-      const zr = await fetch(ENV.ZAP_B_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
-          "x-pipe-tag": "aplus",
-        },
-        body: JSON.stringify({ tag: "aplus", product: ENV.PRODUCT_ID, payload: parsed, ts: new Date().toISOString() }),
-      });
-      if (!zr.ok) {
-        const txt = await zr.text().catch(() => "");
-        console.warn("⚠️ Zap relay non-200:", zr.status, txt);
-        await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
-      }
-    } catch (e) {
-      console.warn("⚠️ Zap relay error:", e.message);
-      await persistEvent("audit", { err: e.message }, "zap-error");
+    // Parse raw → parsed
+    if (typeof raw === "string") {
+      const s = raw.trim();
+      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
+    } else if (raw && typeof raw === "object") {
+      parsed = raw;
     }
-  }
 
-  return res.json({ ok: true, gated: "passed" });
-}
+    // AFTER parsing: log parsed object
+    const parsedPreview = JSON.stringify(parsed);
+    console.log("[/aplus] parsed:", parsedPreview);
 
-    // Non-compact payloads: no gate, just acknowledge
-    return res.json({ ok: true });
+    // Always log receipt to DB
+    await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
+
+    // Only the compact payload goes through the full gate
+    if (!(parsed && parsed.type === "APlus")) {
+      return res.json({ ok: true });
+    }
+
+    // ---- 1) Payload validation (fast fail)
+    const v = validateAPlus(parsed);
+    if (!v.ok) {
+      await persistEvent("audit", { route: "/aplus", reason: v.reason }, "aplus-validate-fail");
+      return res.status(202).json({ ok: true, skipped: v.reason });
+    }
+
+    // ---- 2) DB-backed cooldown / de-dup
+    if (await isDupeOrCooling(parsed)) {
+      await persistEvent("audit", { route: "/aplus", reason: "cooldown" }, "aplus-cooldown-skip");
+      return res.status(202).json({ ok: true, skipped: "cooldown" });
+    }
+
+    // ---- 3) DOM & CVD checks (freshness + logic alignment)
+    const [domQ, cvdQ] = await Promise.all([
+      pg.query(`select * from dom_snapshots order by ts desc limit 1`),
+      pg.query(`select * from cvd_ticks     order by ts desc limit 1`),
+    ]);
+    const dom = domQ.rows[0] || null;
+    const cvd = cvdQ.rows[0] || null;
+
+    const nowMs = Date.now();
+
+    const domFreshOk =
+      !!dom && dom.ts && (nowMs - new Date(dom.ts).getTime() <= ENV.MAX_DOM_AGE_MS);
+
+    const domSpreadOk =
+      !!dom && Number.isFinite(dom.p_bid) && Number.isFinite(dom.p_ask) && dom.p_ask > dom.p_bid;
+
+    const cvdFreshOk =
+      !!cvd && cvd.ts && (nowMs - new Date(cvd.ts).getTime() <= ENV.MAX_CVD_AGE_MS);
+
+    const dir = String(parsed.d).toUpperCase();
+    const cvdDirOk =
+      !!cvd && (dir === "LONG" ? cvd.cvd_ema > 0 : dir === "SHORT" ? cvd.cvd_ema < 0 : true);
+
+    const gateOk = domFreshOk && domSpreadOk && cvdFreshOk && cvdDirOk;
+
+    console.log("[/aplus] gate check:",
+      { dir, domFreshOk, domSpreadOk, cvdFreshOk, cvdDirOk, domRow: dom, cvdRow: cvd }
+    );
+
+    if (!gateOk) {
+      await persistEvent("audit", {
+        route: "/aplus",
+        gate: { dir, domFreshOk, domSpreadOk, cvdFreshOk, cvdDirOk,
+                dom_age_ms: dom?.ts ? nowMs - new Date(dom.ts).getTime() : null,
+                cvd_age_ms: cvd?.ts ? nowMs - new Date(cvd.ts).getTime() : null,
+                cvd_ema: cvd?.cvd_ema ?? null }
+      }, "dom-cvd-skip");
+      return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
+    }
+
+    await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null }, "dom-cvd-cleared");
+
+    // ---- 4) Persist A+ signal, then optional Zapier relay
+    await persistAPlus(parsed);
+
+    if (ENV.ZAP_B_URL) {
+      try {
+        const zr = await fetch(ENV.ZAP_B_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+            "x-pipe-tag": "aplus",
+          },
+          body: JSON.stringify({ tag: "aplus", product: ENV.PRODUCT_ID, payload: parsed, ts: new Date().toISOString() }),
+        });
+        if (!zr.ok) {
+          const txt = await zr.text().catch(() => "");
+          console.warn("⚠️ Zap relay non-200:", zr.status, txt);
+          await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
+        }
+      } catch (e) {
+        console.warn("⚠️ Zap relay error:", e.message);
+        await persistEvent("audit", { err: e.message }, "zap-error");
+      }
+    }
+
+    return res.json({ ok: true, gated: "passed" });
   } catch (e) {
     console.error("❌ /aplus error:", e.message);
     await persistEvent("audit", { err: e.message }, "aplus-handler-error");
     return res.status(500).json({ error: "server_error" });
   }
 });
-
-/* -------------------------  A+ sample (dev only)  ------------------------- */
-// Visit in browser: /aplus/sample?key=YOUR_TV_SHARED_SECRET
-if (ENABLE_TEST_ROUTES) {
-  app.get("/aplus/sample", async (req, res) => {
-    try {
-      // optional shared secret
-      if (ENV.TV_API_KEY) {
-        const got = req.query.key || req.headers["x-tv-key"];
-        if (!got || got !== ENV.TV_API_KEY) {
-          return res.status(401).json({ error: "unauthorized" });
-        }
-      }
-
-      const sample = {
-        type: "APlus",
-        s: "BTC-USD",
-        t: Date.now(),
-        f: "15",
-        p: 50000,
-        d: "LONG",
-        e: "APlus",
-        sc: 77,
-        sr: false,
-        R: "SCORE|MODE",
-      };
-
-      await persistEvent("aplus", sample);
-      await persistAPlus(sample);
-
-      return res.json({ ok: true, injected: sample });
-    } catch (e) {
-      console.error("❌ /aplus/sample error:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
-}
 
 /* ---------------- Nightly prune (server-side) ---------------- */
 async function pruneOld() {
