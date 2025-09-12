@@ -481,6 +481,14 @@ app.post("/aplus", async (req, res) => {
 
     // TV sends JSON or raw string
     let raw = req.body, parsed = null;
+    // Right after: let raw = req.body, parsed = null;
+    console.log("[/aplus] raw body:", raw);
+
+    // … do your parsing logic …
+
+    // Then after you’ve built `parsed`
+    console.log("[/aplus] parsed:", JSON.stringify(parsed));
+    
     if (typeof raw === "string") {
       const s = raw.trim();
       if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
