@@ -25,6 +25,13 @@ const ENV = {
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "6000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
 
+  // --- Kitchen-sink validation thresholds ---
+  MIN_SCORE:  parseInt(process.env.MIN_SCORE  || "0", 10),   // require score >= MIN_SCORE
+  MAX_AGE_MS: parseInt(process.env.MAX_AGE_MS || "180000", 10), // payload t must be fresh (<= 3m)
+  MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "20000", 10), // DOM row ≤ 20s old
+  MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "20000", 10), // CVD row ≤ 20s old
+  COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "0", 10), // optional per-dir cooldown
+  
   // Retention window used by nightly prune
   PRUNE_DAYS: Math.max(1, parseInt(process.env.PRUNE_DAYS || "14", 10)),
 
