@@ -273,6 +273,50 @@ async function isDupeOrCooling(p) {
   return rows.length > 0;
 }
 
+/* ---------- DOM/CVD gate helper (place above /aplus) ---------- */
+async function gateDomCvd(parsed) {
+  const dir = String(parsed.d).toUpperCase();
+
+  const [domQ, cvdQ] = await Promise.all([
+    pg.query(`select * from dom_snapshots order by ts desc limit 1`),
+    pg.query(`select * from cvd_ticks     order by ts desc limit 1`),
+  ]);
+  const dom = domQ.rows[0] || null;
+  const cvd = cvdQ.rows[0] || null;
+
+  const nowMs = Date.now();
+
+  const domFreshOk =
+    !!dom && dom.ts && (nowMs - new Date(dom.ts).getTime() <= ENV.MAX_DOM_AGE_MS);
+
+  const domSpreadOk =
+    !!dom && Number.isFinite(dom.p_bid) && Number.isFinite(dom.p_ask) && dom.p_ask > dom.p_bid;
+
+  const cvdFreshOk =
+    !!cvd && cvd.ts && (nowMs - new Date(cvd.ts).getTime() <= ENV.MAX_CVD_AGE_MS);
+
+  const cvdDirOk =
+    !!cvd && (dir === "LONG" ? cvd.cvd_ema > 0 : dir === "SHORT" ? cvd.cvd_ema < 0 : true);
+
+  const ok = domFreshOk && domSpreadOk && cvdFreshOk && cvdDirOk;
+
+  return {
+    ok,
+    details: {
+      dir,
+      domFreshOk,
+      domSpreadOk,
+      cvdFreshOk,
+      cvdDirOk,
+      dom_age_ms: dom?.ts ? nowMs - new Date(dom.ts).getTime() : null,
+      cvd_age_ms: cvd?.ts ? nowMs - new Date(cvd.ts).getTime() : null,
+      cvd_ema: cvd?.cvd_ema ?? null,
+      domRow: dom,
+      cvdRow: cvd,
+    }
+  };
+}
+
 /* -------------------------- Express app -------------------------- */
 const app = express();
 // TV mobile sometimes posts text/plain
