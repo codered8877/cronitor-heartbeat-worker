@@ -486,39 +486,85 @@ app.post("/aplus", async (req, res) => {
       if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
     } else if (raw && typeof raw === "object") parsed = raw;
 
+    // Always log receipt
     await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
 
-    // If compact A+ shape, persist to aplus_signals
-    if (parsed && parsed.type === "APlus") await persistAPlus(parsed);
+    // ---- DOM / CVD GATE (adds the thing you’re asking for) ----
+    // Only gate compact APlus payloads; pass through others.
+    if (parsed && parsed.type === "APlus") {
+      const dir = (parsed.d || "").toUpperCase(); // LONG | SHORT
 
-    // Optional Zapier relay
-    if (ENV.ZAP_B_URL) {
-      try {
-        const zr = await fetch(ENV.ZAP_B_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
-            "x-pipe-tag": "aplus",
-          },
-          body: JSON.stringify({
-            tag: "aplus",
-            product: ENV.PRODUCT_ID,
-            payload: parsed ?? raw,
-            ts: new Date().toISOString(),
-          }),
-        });
-        if (!zr.ok) {
-          const txt = await zr.text().catch(() => "");
-          console.warn("⚠️ Zap relay non-200:", zr.status, txt);
-          await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
-        }
-      } catch (e) {
-        console.warn("⚠️ Zap relay error:", e.message);
-        await persistEvent("audit", { err: e.message }, "zap-error");
+      // pull latest DOM & CVD rows
+      const domQ = await pg.query(`select * from dom_snapshots order by ts desc limit 1`);
+      const cvdQ = await pg.query(`select * from cvd_ticks     order by ts desc limit 1`);
+      const dom = domQ.rows[0] || null;
+      const cvd = cvdQ.rows[0] || null;
+
+      // simple example gates; tweak to your spec
+      const domOk =
+        !!dom &&
+        Number.isFinite(dom.p_bid) &&
+        Number.isFinite(dom.p_ask) &&
+        dom.p_ask > dom.p_bid; // spread positive
+
+      const cvdOk =
+        !!cvd &&
+        (dir === "LONG"  ? cvd.cvd_ema > 0
+         : dir === "SHORT" ? cvd.cvd_ema < 0
+         : true);
+
+      if (!domOk || !cvdOk) {
+        await persistEvent(
+          "audit",
+          { route: "/aplus", gate: { domOk, cvdOk, dir, cvd_ema: cvd?.cvd_ema ?? null } },
+          "dom-cvd-skip"
+        );
+        // 202 = accepted but not acted on
+        return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
       }
+
+      // ✅ AFTER DOM/CVD gate passes — this is the point you asked about
+      await persistEvent(
+        "audit",
+        { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null },
+        "dom-cvd-cleared"
+      );
+
+      // Now that the gate passed, persist to aplus_signals
+      await persistAPlus(parsed);
+
+      // Optional Zapier relay (only after gate passes)
+      if (ENV.ZAP_B_URL) {
+        try {
+          const zr = await fetch(ENV.ZAP_B_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+              "x-pipe-tag": "aplus",
+            },
+            body: JSON.stringify({
+              tag: "aplus",
+              product: ENV.PRODUCT_ID,
+              payload: parsed,
+              ts: new Date().toISOString(),
+            }),
+          });
+          if (!zr.ok) {
+            const txt = await zr.text().catch(() => "");
+            console.warn("⚠️ Zap relay non-200:", zr.status, txt);
+            await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
+          }
+        } catch (e) {
+          console.warn("⚠️ Zap relay error:", e.message);
+          await persistEvent("audit", { err: e.message }, "zap-error");
+        }
+      }
+
+      return res.json({ ok: true, gated: "passed" });
     }
 
+    // Non-compact payloads: no gate, just acknowledge
     return res.json({ ok: true });
   } catch (e) {
     console.error("❌ /aplus error:", e.message);
