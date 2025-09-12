@@ -98,8 +98,6 @@ function buildPgConfig() {
 }
 const pg = new Pool(buildPgConfig());
 
-const ENABLE_TEST_ROUTES = process.env.ENABLE_TEST_ROUTES === "1";
-
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
