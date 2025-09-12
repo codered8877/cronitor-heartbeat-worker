@@ -530,6 +530,19 @@ if (parsed && parsed.type === "APlus") {
          : dir === "SHORT" ? cvd.cvd_ema < 0
          : true);
 
+     // simple example gates; tweak to your logic
+     const domOk = dom && dom.side === dir;
+     const cvdOk = cvd && (dir === "LONG" ? cvd.delta > 0 : cvd.delta < 0);
+
+     // 🔎 Gate result logging
+     console.log("[/aplus] gate check:",
+       "dir=", dir,
+       "domOk=", domOk,
+       "cvdOk=", cvdOk,
+       "domRow=", dom,
+       "cvdRow=", cvd
+     );
+
       if (!domOk || !cvdOk) {
         await persistEvent(
           "audit",
