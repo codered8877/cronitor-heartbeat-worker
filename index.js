@@ -497,10 +497,19 @@ app.post("/aplus", async (req, res) => {
     // Always log receipt
     await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
 
-    // ---- DOM / CVD GATE (adds the thing you’re asking for) ----
-    // Only gate compact APlus payloads; pass through others.
-    if (parsed && parsed.type === "APlus") {
-      const dir = (parsed.d || "").toUpperCase(); // LONG | SHORT
+    // ----- DOM / CVD GATE (adds the timestamp gate)
+// Only gate compact APlus payloads
+if (parsed && parsed.type === "APlus") {
+  const dir = (parsed.d || "").toUpperCase();
+
+  // 🔎 Gate-level logging
+  console.log("[/aplus] entering DOM/CVD gate:",
+    "dir=", dir,
+    "price=", parsed.p,
+    "score=", parsed.sc
+  );
+
+  // ... rest of your DOM/CVD gate logic ...
 
       // pull latest DOM & CVD rows
       const domQ = await pg.query(`select * from dom_snapshots order by ts desc limit 1`);
