@@ -196,14 +196,17 @@ async function persistEvent(kind, payload, note = null) {
 }
 async function persistAPlus(compact) {
   const { s, f, d, p, sc, sr, R } = compact || {};
+  const dirUC = d ? String(d).toUpperCase() : null;
+  const symUC = s ? String(s).toUpperCase() : null;
+
   await pg.query(
     `insert into aplus_signals(product, symbol, tf, dir, price, score, spider_rej, reasons)
      values ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [
       ENV.PRODUCT_ID,
-      s ?? null,
+      symUC,
       f ?? null,
-      d ?? null,
+      dirUC,
       p != null ? Number(p) : null,
       Number.isFinite(Number(sc)) ? Number(sc) : null,
       !!sr,
@@ -211,6 +214,7 @@ async function persistAPlus(compact) {
     ]
   );
 }
+
 async function persistDOM(dom) {
   await pg.query(
     `insert into dom_snapshots(product, p_bid, q_bid, p_ask, q_ask, sequence)
