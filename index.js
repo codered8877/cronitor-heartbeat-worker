@@ -1119,11 +1119,24 @@ app.get("/env", (_req, res) => {
         ZAP_API_KEY: hide(ENV.ZAP_API_KEY),
         ZAP_DOM_URL: !!ENV.ZAP_DOM_URL,
         ZAP_DOM_API_KEY: hide(ENV.ZAP_DOM_API_KEY),
+
+        // Tuning
         DOM_POLL_MS: ENV.DOM_POLL_MS,
         CVD_EMA_LEN: ENV.CVD_EMA_LEN,
+
+        // Kitchen-sink thresholds
+        MIN_SCORE: ENV.MIN_SCORE,
+        MAX_AGE_MS: ENV.MAX_AGE_MS,
+        MAX_DOM_AGE_MS: ENV.MAX_DOM_AGE_MS,
+        MAX_CVD_AGE_MS: ENV.MAX_CVD_AGE_MS,
+        COOLDOWN_SEC: ENV.COOLDOWN_SEC,
+
+        // Ops
         PRUNE_DAYS: ENV.PRUNE_DAYS,
         CRONITOR_URL: !!ENV.CRONITOR_URL,
-        PG_MODE: (ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE) ? "fields" : (ENV.DATABASE_URL ? "url" : "none"),
+        PG_MODE: (ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE)
+          ? "fields"
+          : (ENV.DATABASE_URL ? "url" : "none"),
         PORT: ENV.PORT,
       }
     });
