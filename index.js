@@ -869,6 +869,8 @@ app.post("/dom", async (req, res) => {
    Optional body JSON to override fields (s, f, d, p, sc, sr, R).
 --------------------------------------------------------------------- */
 app.post("/aplus/test", async (req, res) => {
+  console.log("✅ APlus received at", new Date().toISOString());
+  console.log("Payload:", JSON.stringify(req.body, null, 2));
   try {
     if (ENV.TV_API_KEY) {
       const got = req.headers["x-tv-key"];
