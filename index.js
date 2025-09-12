@@ -271,6 +271,53 @@ async function isDupeOrCooling(p) {
   return rows.length > 0;
 }
 
+/* ---------- Symbol normalizer → coerce to ENV.PRODUCT_ID ---------- */
+function normalizeToProductId(symRaw, productId = ENV.PRODUCT_ID) {
+  if (!symRaw) return symRaw;
+  const want = String(productId).toUpperCase();         // e.g. BTC-USD
+  const s0   = String(symRaw).trim().toUpperCase();     // raw
+
+  // strip exchange prefix: BINANCE:BTCUSDT → BTCUSDT
+  const s1 = s0.includes(":") ? s0.split(":").pop() : s0;
+
+  // remove non-alnum/dash; keep dash to catch already-correct forms
+  const s2 = s1.replace(/[^A-Z0-9\-]/g, "");
+
+  // direct hit?
+  if (s2 === want) return want;
+
+  // common aliases → normalized two-leg with dash
+  // USDT → USD (many webhooks send BTCUSDT for BTC-USD)
+  let core = s2.replace("USDT", "USD");
+
+  // if it’s a compact pair like BTCUSD, insert dash before the quote leg
+  const QUOTES = ["USD","USDC","EUR","GBP","JPY","AUD","CAD","CHF","NZD","BRL","MXN","TRY","ZAR","HKD","SGD"];
+  for (const q of QUOTES) {
+    if (core.endsWith(q) && !core.includes("-")) {
+      const base = core.slice(0, -q.length);
+      core = `${base}-${q}`;
+      break;
+    }
+  }
+
+  // XBT → BTC (some feeds use XBTUSD)
+  core = core.replace(/^XBT-/, "BTC-");
+
+  // last chance: if still not equal but same base/quote, coerce to want
+  const asBaseQuote = (s) => {
+    const [b,q] = s.split("-");
+    return { b, q };
+  };
+  if (core.includes("-")) {
+    const a = asBaseQuote(core);
+    const w = asBaseQuote(want);
+    if (a.b === w.b && a.q === w.q) return want;
+  }
+
+  // default to product id
+  return want;
+}
+
 /* ---------- DOM/CVD gate helper (place above /aplus) ---------- */
 async function gateDomCvd(parsed) {
   const dir = String(parsed.d).toUpperCase();
@@ -600,8 +647,11 @@ app.post("/aplus", async (req, res) => {
 
     // Only the compact payload goes through the full gate
     if (!(parsed && parsed.type === "APlus")) {
-      return res.json({ ok: true });
+    return res.json({ ok: true });
     }
+
+    // --- normalize symbol to your server’s PRODUCT_ID
+    parsed.s = normalizeToProductId(parsed.s, ENV.PRODUCT_ID);
 
     // ---- 1) Payload validation (fast fail)
     const v = validateAPlus(parsed);
