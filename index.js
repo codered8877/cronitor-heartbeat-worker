@@ -817,6 +817,12 @@ async function domTick() {
     }
   }
 }
+
+/* ---------------- Bridge helpers to Part 1 ---------------- */
+globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
+globalThis._persistDOM   = async (row) => persistDOM(row);
+globalThis._persistCVD   = async (row) => persistCVD(row);
+
 setInterval(domTick, DOM_POLL_MS);
 console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
 
