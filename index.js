@@ -504,102 +504,78 @@ console.log("[/aplus] parsed:", parsedPreview);
 // Always log receipt to DB
 await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
 
-    // ----- DOM / CVD GATE (adds the timestamp gate)
-// Only gate compact APlus payloads
+// ----- DOM / CVD gate (only for compact APlus)
 if (parsed && parsed.type === "APlus") {
   const dir = (parsed.d || "").toUpperCase();
 
-  // 🔎 Gate-level logging
   console.log("[/aplus] entering DOM/CVD gate:",
     "dir=", dir,
     "price=", parsed.p,
     "score=", parsed.sc
   );
 
-  // ... rest of your DOM/CVD gate logic ...
+  // pull latest DOM & CVD rows
+  const domQ = await pg.query(`select * from dom_snapshots order by ts desc limit 1`);
+  const cvdQ = await pg.query(`select * from cvd_ticks     order by ts desc limit 1`);
+  const dom = domQ.rows[0] || null;
+  const cvd = cvdQ.rows[0] || null;
 
-      // pull latest DOM & CVD rows
-      const domQ = await pg.query(`select * from dom_snapshots order by ts desc limit 1`);
-      const cvdQ = await pg.query(`select * from cvd_ticks     order by ts desc limit 1`);
-      const dom = domQ.rows[0] || null;
-      const cvd = cvdQ.rows[0] || null;
+  // Gate: valid DOM + spread positive; CVD EMA agrees with direction
+  const domOk =
+    !!dom &&
+    Number.isFinite(dom.p_bid) &&
+    Number.isFinite(dom.p_ask) &&
+    dom.p_ask > dom.p_bid;
 
-      // simple example gates; tweak to your spec
-      const domOk =
-        !!dom &&
-        Number.isFinite(dom.p_bid) &&
-        Number.isFinite(dom.p_ask) &&
-        dom.p_ask > dom.p_bid; // spread positive
+  const cvdOk =
+    !!cvd &&
+    (dir === "LONG"  ? cvd.cvd_ema > 0
+     : dir === "SHORT" ? cvd.cvd_ema < 0
+     : true);
 
-      const cvdOk =
-        !!cvd &&
-        (dir === "LONG"  ? cvd.cvd_ema > 0
-         : dir === "SHORT" ? cvd.cvd_ema < 0
-         : true);
+  console.log("[/aplus] gate check:",
+    "dir=", dir,
+    "domOk=", domOk,
+    "cvdOk=", cvdOk,
+    "domRow=", dom,
+    "cvdRow=", cvd
+  );
 
-     // simple example gates; tweak to your logic
-     const domOk = dom && dom.side === dir;
-     const cvdOk = cvd && (dir === "LONG" ? cvd.delta > 0 : cvd.delta < 0);
+  if (!domOk || !cvdOk) {
+    await persistEvent("audit", { route: "/aplus", gate: { domOk, cvdOk, dir, cvd_ema: cvd?.cvd_ema ?? null } }, "dom-cvd-skip");
+    return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
+  }
 
-     // 🔎 Gate result logging
-     console.log("[/aplus] gate check:",
-       "dir=", dir,
-       "domOk=", domOk,
-       "cvdOk=", cvdOk,
-       "domRow=", dom,
-       "cvdRow=", cvd
-     );
+  await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null }, "dom-cvd-cleared");
 
-      if (!domOk || !cvdOk) {
-        await persistEvent(
-          "audit",
-          { route: "/aplus", gate: { domOk, cvdOk, dir, cvd_ema: cvd?.cvd_ema ?? null } },
-          "dom-cvd-skip"
-        );
-        // 202 = accepted but not acted on
-        return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
+  // persist compact A+ signal
+  await persistAPlus(parsed);
+
+  // optional Zapier relay
+  if (ENV.ZAP_B_URL) {
+    try {
+      const zr = await fetch(ENV.ZAP_B_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+          "x-pipe-tag": "aplus",
+        },
+        body: JSON.stringify({ tag: "aplus", product: ENV.PRODUCT_ID, payload: parsed, ts: new Date().toISOString() }),
+      });
+      if (!zr.ok) {
+        const txt = await zr.text().catch(() => "");
+        console.warn("⚠️ Zap relay non-200:", zr.status, txt);
+        await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
       }
-
-      // ✅ AFTER DOM/CVD gate passes — this is the point you asked about
-      await persistEvent(
-        "audit",
-        { route: "/aplus", gate: "CLEARED", dir, cvd_ema: cvd?.cvd_ema ?? null },
-        "dom-cvd-cleared"
-      );
-
-      // Now that the gate passed, persist to aplus_signals
-      await persistAPlus(parsed);
-
-      // Optional Zapier relay (only after gate passes)
-      if (ENV.ZAP_B_URL) {
-        try {
-          const zr = await fetch(ENV.ZAP_B_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
-              "x-pipe-tag": "aplus",
-            },
-            body: JSON.stringify({
-              tag: "aplus",
-              product: ENV.PRODUCT_ID,
-              payload: parsed,
-              ts: new Date().toISOString(),
-            }),
-          });
-          if (!zr.ok) {
-            const txt = await zr.text().catch(() => "");
-            console.warn("⚠️ Zap relay non-200:", zr.status, txt);
-            await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
-          }
-        } catch (e) {
-          console.warn("⚠️ Zap relay error:", e.message);
-          await persistEvent("audit", { err: e.message }, "zap-error");
-        }
-      }
-
-      return res.json({ ok: true, gated: "passed" });
+    } catch (e) {
+      console.warn("⚠️ Zap relay error:", e.message);
+      await persistEvent("audit", { err: e.message }, "zap-error");
     }
+  }
+
+  return res.json({ ok: true, gated: "passed" });
+}
 
     // Non-compact payloads: no gate, just acknowledge
     return res.json({ ok: true });
