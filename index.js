@@ -897,11 +897,6 @@ setInterval(async () => {
 
 console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
 
-/* ---------------- Bridge helpers to Part 1 ---------------- */
-globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
-globalThis._persistDOM   = async (row) => persistDOM(row);
-globalThis._persistCVD   = async (row) => persistCVD(row);
-
 /* =====================================================================
    ADD-ONS: legacy /dom ingest, admin/test endpoints, simple metrics
    These are optional but helpful for debugging and feature parity.
