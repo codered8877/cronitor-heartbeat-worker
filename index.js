@@ -681,27 +681,34 @@ await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir: gate.detail
     // ---- 4) Persist A+ signal, then optional Zapier relay
     await persistAPlus(parsed);
 
-    if (ENV.ZAP_B_URL) {
-      try {
-        const zr = await fetch(ENV.ZAP_B_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
-            "x-pipe-tag": "aplus",
-          },
-          body: JSON.stringify({ tag: "aplus", product: ENV.PRODUCT_ID, payload: parsed, ts: new Date().toISOString() }),
-        });
-        if (!zr.ok) {
-          const txt = await zr.text().catch(() => "");
-          console.warn("⚠️ Zap relay non-200:", zr.status, txt);
-          await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
-        }
-      } catch (e) {
-        console.warn("⚠️ Zap relay error:", e.message);
-        await persistEvent("audit", { err: e.message }, "zap-error");
-      }
+/* ---------- Optional Zapier forward ---------- */
+if (ENV.ZAP_B_URL) {
+  try {
+    const zr = await fetch(ENV.ZAP_B_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(ENV.ZAP_API_KEY ? { "x-api-key": ENV.ZAP_API_KEY } : {}),
+        "x-pipe-tag": "aplus",
+      },
+      body: JSON.stringify({
+        tag: "aplus",
+        product: ENV.PRODUCT_ID,
+        payload: parsed,                       // the compact A+ you just validated/persisted
+        ts: new Date().toISOString(),
+      }),
+    });
+
+    if (!zr.ok) {
+      const txt = await zr.text().catch(() => "");
+      console.warn("⚠️ Zap relay non-200:", zr.status, txt);
+      await persistEvent("audit", { status: zr.status, txt }, "zap-non200");
     }
+  } catch (e) {
+    console.warn("⚠️ Zap relay error:", e.message);
+    await persistEvent("audit", { err: e.message }, "zap-error");
+  }
+}
 
     return res.json({ ok: true, gated: "passed" });
   } catch (e) {
