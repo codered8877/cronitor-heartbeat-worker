@@ -480,22 +480,29 @@ app.post("/aplus", async (req, res) => {
     }
 
     // TV sends JSON or raw string
-    let raw = req.body, parsed = null;
-    // Right after: let raw = req.body, parsed = null;
-    console.log("[/aplus] raw body:", raw);
+let raw = req.body, parsed = null;
 
-    // … do your parsing logic …
+// Immediately after: preview raw (trim if too long)
+const rawPreview =
+  typeof raw === "string" ? raw.slice(0, 500) : raw;
+console.log("[/aplus] raw body:", rawPreview);
 
-    // Then after you’ve built `parsed`
-    console.log("[/aplus] parsed:", JSON.stringify(parsed));
-    
-    if (typeof raw === "string") {
-      const s = raw.trim();
-      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
-    } else if (raw && typeof raw === "object") parsed = raw;
+// Parse raw → parsed
+if (typeof raw === "string") {
+  const s = raw.trim();
+  if (s.startsWith("{") && s.endsWith("}")) {
+    try { parsed = JSON.parse(s); } catch {}
+  }
+} else if (raw && typeof raw === "object") {
+  parsed = raw;
+}
 
-    // Always log receipt
-    await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
+// AFTER parsing: log parsed object
+const parsedPreview = JSON.stringify(parsed);
+console.log("[/aplus] parsed:", parsedPreview);
+
+// Always log receipt to DB
+await persistEvent("aplus", parsed ?? raw ?? null, "tv-webhook");
 
     // ----- DOM / CVD GATE (adds the timestamp gate)
 // Only gate compact APlus payloads
