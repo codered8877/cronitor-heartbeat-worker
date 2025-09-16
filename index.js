@@ -1505,7 +1505,17 @@ app.get("/env", (_req, res) => {
         // Tuning
         DOM_POLL_MS: ENV.DOM_POLL_MS,
         CVD_EMA_LEN: ENV.CVD_EMA_LEN,
+                // Tuning
+        DOM_POLL_MS: ENV.DOM_POLL_MS,
+        CVD_EMA_LEN: ENV.CVD_EMA_LEN,
+        OFI_EMA_LEN: ENV.OFI_EMA_LEN,
 
+        // Impact awareness thresholds
+        IMP_SPREAD_TIGHT_BPS: ENV.IMP_SPREAD_TIGHT_BPS,
+        IMP_SPREAD_WIDE_BPS:  ENV.IMP_SPREAD_WIDE_BPS,
+        IMP_VOL_CALM_BPS:     ENV.IMP_VOL_CALM_BPS,
+        IMP_VOL_TURB_BPS:     ENV.IMP_VOL_TURB_BPS,
+        
         // Kitchen-sink thresholds
         MIN_SCORE: ENV.MIN_SCORE,
         MAX_AGE_MS: ENV.MAX_AGE_MS,
