@@ -23,14 +23,23 @@ const ENV = {
 
   // Poll/EMA tuning
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "6000", 10)),
+  DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)), // 8–10s is fine
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
+  OFI_EMA_LEN: Math.max(2, parseInt(process.env.OFI_EMA_LEN || "34", 10)),     // NEW
 
-  // --- Kitchen-sink validation thresholds ---
-  MIN_SCORE:  parseInt(process.env.MIN_SCORE  || "0", 10),   // require score >= MIN_SCORE
-  MAX_AGE_MS: parseInt(process.env.MAX_AGE_MS || "180000", 10), // payload t must be fresh (<= 3m)
   MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "20000", 10), // DOM row ≤ 20s old
+  MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "30000", 10), // 30s
   MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "20000", 10), // CVD row ≤ 20s old
+  MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "30000", 10), // 30s
+
   COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "0", 10), // optional per-dir cooldown
+  COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "300", 10), // 5 minutes
+
+  // Impact-aware sizing thresholds (override via env if you like)
+  IMP_SPREAD_TIGHT_BPS: parseFloat(process.env.IMP_SPREAD_TIGHT_BPS || "1.5"),  // <=1.5 bps
+  IMP_SPREAD_WIDE_BPS:  parseFloat(process.env.IMP_SPREAD_WIDE_BPS  || "6"),    // >=6 bps
+  IMP_VOL_CALM_BPS:     parseFloat(process.env.IMP_VOL_CALM_BPS     || "5"),    // <=5 bps (60s)
+  IMP_VOL_TURB_BPS:     parseFloat(process.env.IMP_VOL_TURB_BPS     || "25"),   // >=25 bps (60s)
 
   // Regime gating (single brain lives in strategy; server only enforces *if* enabled)
   // Defaults are SAFE: shadow-log only (no blocking).
