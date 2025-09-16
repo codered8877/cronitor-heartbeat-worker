@@ -188,15 +188,6 @@ async function dbInit() {
 
   console.log("📦 DB schema ready.");
 }
-
-  // Extend aplus_signals with regime fields (idempotent)
-  await pg.query(`
-    alter table if exists aplus_signals
-      add column if not exists regime text,
-      add column if not exists regime_conf double precision
-  `);
-  await pg.query(`create index if not exists idx_aplus_regime on aplus_signals(regime)`);
-
 async function persistEvent(kind, payload, note = null) {
   await pg.query(
     `insert into events(kind, product, payload, note) values ($1,$2,$3,$4)`,
