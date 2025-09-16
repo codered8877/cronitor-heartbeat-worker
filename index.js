@@ -1039,8 +1039,9 @@ app.post("/internal/retention", async (req, res) => {
     const out = {
       pruned: {
         dom_snapshots: domDel.rowCount || 0,
-        cvd_ticks: cvdDel.rowCount || 0,
-        events: aplDel.rowCount || 0,
+        cvd_ticks:     cvdDel.rowCount || 0,
+        ofi_ticks:     ofiDel.rowCount || 0,
+        events:        aplDel.rowCount || 0,
       },
       at: new Date().toISOString(),
     };
