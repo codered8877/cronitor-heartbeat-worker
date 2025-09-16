@@ -972,10 +972,21 @@ async function pruneOld() {
     const q3 = await pg.query(`delete from dom_snapshots where ts < now() - interval '${days} days'`);
     const q4 = await pg.query(`delete from cvd_ticks     where ts < now() - interval '${days} days'`);
     const q5 = await pg.query(`delete from ofi_ticks     where ts < now() - interval '${days} days'`);
-    console.log(`🧹 Prune(${days}d): events=${q1.rowCount}, aplus=${q2.rowCount}, dom=${q3.rowCount}, cvd=${q4.rowCount}, ofi=${q5.rowCount}`);
-    await persistEvent("prune", { days, counts: {
-      events: q1.rowCount, aplus: q2.rowCount, dom: q3.rowCount, cvd: q4.rowCount
-    }}, "retention");
+
+    console.log(
+      `🧹 Prune(${days}d): events=${q1.rowCount}, aplus=${q2.rowCount}, dom=${q3.rowCount}, cvd=${q4.rowCount}, ofi=${q5.rowCount}`
+    );
+
+    await persistEvent("prune", {
+      days,
+      counts: {
+        events: q1.rowCount,
+        aplus: q2.rowCount,
+        dom: q3.rowCount,
+        cvd: q4.rowCount,
+        ofi: q5.rowCount
+      }
+    }, "retention");
   } catch (e) {
     console.warn("⚠️ prune error:", e.message);
     await persistEvent("audit", { err: e.message }, "prune-error");
