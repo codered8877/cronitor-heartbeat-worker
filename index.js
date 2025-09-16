@@ -370,9 +370,9 @@ async function gateDomCvd(parsed) {
   const dir = String(parsed.d).toUpperCase();
 
   const [domQ, cvdQ] = await Promise.all([
-    pg.query(`select * from dom_snapshots order by ts desc limit 1`),
-    pg.query(`select * from cvd_ticks     order by ts desc limit 1`),
-  ]);
+  pg.query(`select * from dom_snapshots where product = $1 order by ts desc limit 1`, [ENV.PRODUCT_ID]),
+  pg.query(`select * from cvd_ticks     where product = $1 order by ts desc limit 1`, [ENV.PRODUCT_ID]),
+]);
   const dom = domQ.rows[0] || null;
   const cvd = cvdQ.rows[0] || null;
 
