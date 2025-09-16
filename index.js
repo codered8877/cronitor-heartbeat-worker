@@ -191,7 +191,18 @@ async function dbInit() {
       cvd_ema     double precision
     );
   `);
- 
+
+  /* -------------------- OFI (order-flow imbalance) -------------------- */
+  await pg.query(`
+    create table if not exists ofi_ticks (
+      id          bigserial primary key,
+      ts          timestamptz not null default now(),
+      product     text not null,
+      ofi         double precision,
+      ofi_ema     double precision
+    );
+  `);
+  
   // --- Trade feedback
   await pg.query(`
     create table if not exists trade_feedback (
@@ -218,7 +229,8 @@ async function dbInit() {
   await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc)`);
   await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc)`);
   await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc)`);
-
+  await pg.query(`create index if not exists idx_ofi_ts         on ofi_ticks(ts desc)`);
+  
   console.log("📦 DB schema ready.");
 }
 async function persistEvent(kind, payload, note = null) {
