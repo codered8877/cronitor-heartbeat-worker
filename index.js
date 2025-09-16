@@ -39,6 +39,12 @@ const ENV = {
   IMP_VOL_CALM_BPS:     parseFloat(process.env.IMP_VOL_CALM_BPS     || "5"),    // <=5 bps (60s)
   IMP_VOL_TURB_BPS:     parseFloat(process.env.IMP_VOL_TURB_BPS     || "25"),   // >=25 bps (60s)
 
+  // Payload freshness (APlus payload timestamp)
+  MAX_AGE_MS: parseInt(process.env.MAX_AGE_MS || "180000", 10), // 3 minutes
+
+  // Optional score threshold (kept for completeness; safe default)
+  MIN_SCORE:  parseInt(process.env.MIN_SCORE  || "0", 10),
+  
   // Regime gating (single brain lives in strategy; server only enforces *if* enabled)
   // Defaults are SAFE: shadow-log only (no blocking).
   REQUIRE_REGIME_OK: (process.env.REQUIRE_REGIME_OK ?? "false").toLowerCase() === "true",
