@@ -1028,6 +1028,7 @@ app.post("/internal/retention", async (req, res) => {
     
     const domDel = await pg.query(`delete from dom_snapshots where ts < now() - interval '${DOM_DAYS} days'`);
     const cvdDel = await pg.query(`delete from cvd_ticks     where ts < now() - interval '${CVD_DAYS} days'`);
+    const ofiDel = await pg.query(`delete from ofi_ticks     where ts < now() - interval '${OFI_DAYS} days'`);
     const aplDel = await pg.query(`delete from events        where ts < now() - interval '${APL_DAYS} days'`);
 
     await pg.query("analyze dom_snapshots");
