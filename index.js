@@ -1024,7 +1024,8 @@ app.post("/internal/retention", async (req, res) => {
     const DOM_DAYS = parseInt(process.env.RETENTION_DOM_DAYS  || "30", 10);
     const CVD_DAYS = parseInt(process.env.RETENTION_CVD_DAYS  || "30", 10);
     const APL_DAYS = parseInt(process.env.RETENTION_APLUS_DAYS|| "180", 10);
-
+    const OFI_DAYS = parseInt(process.env.RETENTION_OFI_DAYS  || "30", 10);
+    
     const domDel = await pg.query(`delete from dom_snapshots where ts < now() - interval '${DOM_DAYS} days'`);
     const cvdDel = await pg.query(`delete from cvd_ticks     where ts < now() - interval '${CVD_DAYS} days'`);
     const aplDel = await pg.query(`delete from events        where ts < now() - interval '${APL_DAYS} days'`);
