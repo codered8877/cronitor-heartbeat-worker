@@ -1160,6 +1160,13 @@ async function domTick() {
   }
 }
 
+/* -------------------------- OFI state -------------------------- */
+const OFI_EMA_LEN = ENV.OFI_EMA_LEN || 34;
+const alphaOFI = 2 / (OFI_EMA_LEN + 1);
+
+let lastDom = null;          // previous DOM snapshot (for deltas)
+let ofiEma  = 0;             // running EMA of OFI
+
 /* ---------------- Bridge helpers to Part 1 ---------------- */
 globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
 globalThis._persistDOM   = async (row) => persistDOM(row);
@@ -1168,13 +1175,6 @@ globalThis._persistOFI   = async (row) => persistOFI(row);
 
 setInterval(domTick, DOM_POLL_MS);
 console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
-
-/* -------------------------- OFI state -------------------------- */
-const OFI_EMA_LEN = ENV.OFI_EMA_LEN || 34;
-const alphaOFI = 2 / (OFI_EMA_LEN + 1);
-
-let lastDom = null;          // previous DOM snapshot (for deltas)
-let ofiEma  = 0;             // running EMA of OFI
 
 /*------------------- CVD via WS + EMA heartbeat ------------------- */
 const CVD_EMA_LEN = ENV.CVD_EMA_LEN;
@@ -1500,9 +1500,6 @@ app.get("/env", (_req, res) => {
         ZAP_DOM_URL: !!ENV.ZAP_DOM_URL,
         ZAP_DOM_API_KEY: hide(ENV.ZAP_DOM_API_KEY),
 
-        // Tuning
-        DOM_POLL_MS: ENV.DOM_POLL_MS,
-        CVD_EMA_LEN: ENV.CVD_EMA_LEN,
                 // Tuning
         DOM_POLL_MS: ENV.DOM_POLL_MS,
         CVD_EMA_LEN: ENV.CVD_EMA_LEN,
@@ -1513,7 +1510,7 @@ app.get("/env", (_req, res) => {
         IMP_SPREAD_WIDE_BPS:  ENV.IMP_SPREAD_WIDE_BPS,
         IMP_VOL_CALM_BPS:     ENV.IMP_VOL_CALM_BPS,
         IMP_VOL_TURB_BPS:     ENV.IMP_VOL_TURB_BPS,
-        
+
         // Kitchen-sink thresholds
         MIN_SCORE: ENV.MIN_SCORE,
         MAX_AGE_MS: ENV.MAX_AGE_MS,
