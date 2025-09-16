@@ -828,6 +828,76 @@ await persistEvent(
   "dom-cvd-cleared"
 );
 
+/* ---------- 3a) Enrich with OFI + impact sizing ---------- */
+let ofi_ema  = null;
+let spread_bps = null;
+let impact_bucket = "tight";   // default
+let size_mult = 1.0;
+
+try {
+  // 3a-1) Pull most recent OFI tick
+  const ofiQ = await pg.query(
+    `select ofi, ofi_ema from ofi_ticks where product = $1 order by ts desc limit 1`,
+    [ENV.PRODUCT_ID]
+  );
+  ofi_ema = ofiQ.rows[0]?.ofi_ema ?? null;
+
+  // 3a-2) Compute current spread (bps) from the same DOM row we used in the gate
+  const dom = gate?.details?.domRow || null;
+  if (dom && Number.isFinite(dom.p_bid) && Number.isFinite(dom.p_ask) && dom.p_ask > dom.p_bid) {
+    const mid = 0.5 * (Number(dom.p_bid) + Number(dom.p_ask));
+    const spr = Number(dom.p_ask) - Number(dom.p_bid);
+    spread_bps = mid > 0 ? (spr / mid) * 10_000 : null;
+  }
+
+  // 3a-3) Bucketize impact and choose a conservative size multiplier
+  if (Number.isFinite(spread_bps)) {
+    const tightCut = Number(ENV.IMP_SPREAD_TIGHT_BPS); // e.g. 1–2
+    const wideCut  = Number(ENV.IMP_SPREAD_WIDE_BPS);  // e.g. 4–6
+    impact_bucket =
+      spread_bps <= tightCut ? "tight" :
+      spread_bps >= wideCut  ? "wide"  : "normal";
+  }
+
+  // Optionally tilt by volatility regime if you also pass VOL bps in ENV
+  const volCalm = Number(ENV.IMP_VOL_CALM_BPS || 0);
+  const volTurb = Number(ENV.IMP_VOL_TURB_BPS || 0);
+  // If you later add realized vol (e.g., 1m ATR% in events), fold it here.
+
+  // Simple sizing rules (tweak to taste):
+  // - Wide spreads or negative OFI → downsize
+  // - Tight spreads and positive OFI → allow slight upsize
+  const ofiUp   = ofi_ema != null && ofi_ema > 0;
+  const ofiDown = ofi_ema != null && ofi_ema < 0;
+
+  if (impact_bucket === "wide") {
+    size_mult = ofiUp ? 0.75 : 0.5;
+  } else if (impact_bucket === "tight") {
+    size_mult = ofiUp ? 1.15 : 1.0;
+  } else {
+    size_mult = ofiDown ? 0.85 : 1.0;
+  }
+
+  // Attach enrichment to payload (will go to Zap + audit; DB schema for aplus_signals stays unchanged)
+  parsed.meta = {
+    ...(parsed.meta || {}),
+    ofi_ema,
+    impact: {
+      spread_bps,
+      bucket: impact_bucket,
+      size_mult
+    }
+  };
+
+  await persistEvent(
+    "audit",
+    { route: "/aplus", ofi_ema, spread_bps, impact_bucket, size_mult },
+    "aplus-enrich"
+  );
+} catch (e) {
+  console.warn("[/aplus] enrich error:", e.message);
+}
+
 // ---- 3b) Regime shadow-gate (LOG what we *would* do; do NOT block)
 const rg = parsed.regime ?? null;
 const rc = parsed.regime_conf ?? null;
@@ -1333,6 +1403,16 @@ app.get("/cvd/latest", async (req, res) => {
   try {
     const limit = clampInt(req.query.limit, 100, 1, 5000);
     const { rows } = await pg.query(`select * from cvd_ticks order by ts desc limit $1`, [limit]);
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/ofi/latest", async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit, 100, 1, 5000);
+    const { rows } = await pg.query(`select * from ofi_ticks order by ts desc limit $1`, [limit]);
     res.json({ ok: true, rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
