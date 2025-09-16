@@ -1033,6 +1033,7 @@ app.post("/internal/retention", async (req, res) => {
 
     await pg.query("analyze dom_snapshots");
     await pg.query("analyze cvd_ticks");
+    await pg.query("analyze ofi_ticks");
     await pg.query("analyze events");
 
     const out = {
