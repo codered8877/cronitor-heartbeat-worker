@@ -1040,6 +1040,40 @@ async function domTick() {
     console.warn("DOM persist error:", e.message);
   }
 
+    // --- Compute OFI from successive DOM snapshots (simple microstructure proxy)
+    if (lastDom) {
+      const pBidNow = Number(row.p_bid ?? 0),  pBidPrev = Number(lastDom.p_bid ?? 0);
+      const pAskNow = Number(row.p_ask ?? 0),  pAskPrev = Number(lastDom.p_ask ?? 0);
+      const qBidNow = Number(row.q_bid ?? 0),  qBidPrev = Number(lastDom.q_bid ?? 0);
+      const qAskNow = Number(row.q_ask ?? 0),  qAskPrev = Number(lastDom.q_ask ?? 0);
+
+      const dBid = qBidNow - qBidPrev;                    // depth change at best bid
+      const dAsk = qAskNow - qAskPrev;                    // depth change at best ask
+      const bidUp = pBidNow > pBidPrev;
+      const bidDn = pBidNow < pBidPrev;
+      const askDn = pAskNow < pAskPrev;
+      const askUp = pAskNow > pAskPrev;
+
+      // Sign depth changes by whether the quote moved “in” (more aggressive) or “out”
+      let ofiInst = 0;
+      if (bidUp) ofiInst += Math.abs(dBid);
+      else if (bidDn) ofiInst -= Math.abs(dBid);
+
+      if (askDn) ofiInst += Math.abs(dAsk);
+      else if (askUp) ofiInst -= Math.abs(dAsk);
+
+      // EMA of instantaneous OFI
+      ofiEma = (ofiEma === 0 ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma);
+
+      // Persist OFI tick + light audit
+      const ofiRow = { ofi: ofiInst, ofi_ema: +ofiEma.toFixed(6) };
+      await globalThis._persistEvent("ofi", { ts: row.ts, ...ofiRow }, "calc");
+      await globalThis._persistOFI(ofiRow);
+    }
+
+    // carry current DOM → next iteration baseline
+    lastDom = row;
+  
   // Optional fan-out
   if (ZAP_DOM_URL) {
     try {
