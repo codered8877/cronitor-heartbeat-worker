@@ -194,8 +194,6 @@ async function dbInit() {
   await pg.query(`create index if not exists idx_feedback_ts     on trade_feedback(ts desc)`);
   await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
   
-  // --- Trade feedback (your existing block here)
-
   // Indexes
   await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
   await pg.query(`create index if not exists idx_events_kind    on events(kind)`);
