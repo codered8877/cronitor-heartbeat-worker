@@ -620,6 +620,8 @@ app.get("/retention", async (req, res) => {
     { table: "dom_snapshots", interval: "14 days"  },
     { table: "cvd_ticks",     interval: "14 days"  },
     { table: "trade_feedback",interval: "365 days" },
+    { table: "cvd_ticks",     interval: "14 days"  },
+    { table: "ofi_ticks",     interval: "14 days"  },
   ];
   const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
 
