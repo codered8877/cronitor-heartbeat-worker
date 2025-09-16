@@ -1496,6 +1496,7 @@ app.get("/metrics/simple", async (_req, res) => {
       aplus_signals: await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from aplus_signals`),
       dom_snapshots: await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from dom_snapshots`),
       cvd_ticks:     await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from cvd_ticks`),
+      ofi_ticks:     await q(`select count(*)::int c, coalesce(max(ts),'1970-01-01'::timestamptz) mx from ofi_ticks`),
     };
     res.json({ ok: true, generated_at: new Date().toISOString(), metrics: m });
   } catch (e) {
