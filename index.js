@@ -574,7 +574,7 @@ app.get("/retention", async (req, res) => {
 
   // use your canonical table names
   const plan = [
-    { table: "aplus_signals", interval: "180 days" },
+    { table: "aplus_signals", interval: `${ENV.PRUNE_DAYS} days` },
     { table: "events",        interval: "30 days"  },
     { table: "dom_snapshots", interval: "14 days"  },
     { table: "cvd_ticks",     interval: "14 days"  },
