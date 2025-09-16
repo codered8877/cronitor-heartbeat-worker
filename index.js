@@ -88,6 +88,11 @@ const ENV = {
     cronitor: !!ENV.CRONITOR_URL,
     pg_mode: usingFields ? "fields" : usingURL ? "url" : "none",
     port: ENV.PORT,
+    ofi_ema_len: ENV.OFI_EMA_LEN,
+    impact_cfg: {
+      tight: { spread_bps: ENV.IMP_SPREAD_TIGHT_BPS, vol_bps: ENV.IMP_VOL_CALM_BPS },
+      wide:  { spread_bps: ENV.IMP_SPREAD_WIDE_BPS,  vol_bps: ENV.IMP_VOL_TURB_BPS }
+    }
   });
 })();
 
