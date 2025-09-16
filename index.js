@@ -174,7 +174,26 @@ async function dbInit() {
       cvd_ema     double precision
     );
   `);
+ 
+  // --- Trade feedback
+  await pg.query(`
+    create table if not exists trade_feedback (
+      id bigserial primary key,
+      ts timestamptz not null default now()
+    );
+  `);
 
+  await pg.query(`
+    alter table if exists trade_feedback
+      add column if not exists signal_id bigint,
+      add column if not exists outcome   text,
+      add column if not exists rr        double precision,
+      add column if not exists notes     text
+  `);
+
+  await pg.query(`create index if not exists idx_feedback_ts     on trade_feedback(ts desc)`);
+  await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
+  
   // --- Trade feedback (your existing block here)
 
   // Indexes
