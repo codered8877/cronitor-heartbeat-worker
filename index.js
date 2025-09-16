@@ -203,7 +203,6 @@ async function dbInit() {
   await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc)`);
   await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc)`);
   await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc)`);
-  await pg.query(`create index if not exists idx_feedback_ts    on trade_feedback(ts desc)`);
 
   console.log("📦 DB schema ready.");
 }
