@@ -276,6 +276,15 @@ async function persistCVD(row) {
   );
 }
 
+// --- OFI (order-flow imbalance) persist ---
+async function persistOFI(pg, product, ofi, ofiEma) {
+  await pg.query(
+    `insert into ofi_ticks (ts, product, ofi, ofi_ema)
+     values (now(), $1, $2, $3)`,
+    [product, ofi, ofiEma]
+  );
+}
+
 // ---------- A+ validation & cooldown helpers ----------
 function isFiniteNum(n) { return Number.isFinite(+n); }
 
