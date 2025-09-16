@@ -608,7 +608,7 @@ console.log("🧮 Regime perf route enabled: GET /perf/by_regime");
 const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
 
 app.get("/retention", async (req, res) => {
-  const token = req.get("X-Auth-Token") || req.query.token || "";
+  const tables = ["aplus_signals","events","dom_snapshots","cvd_ticks","ofi_ticks","trade_feedback"];
   if (!RETENTION_TOKEN || token !== RETENTION_TOKEN) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
