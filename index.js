@@ -277,11 +277,10 @@ async function persistCVD(row) {
 }
 
 // --- OFI (order-flow imbalance) persist ---
-async function persistOFI(pg, product, ofi, ofiEma) {
+async function persistOFI(row) {
   await pg.query(
-    `insert into ofi_ticks (ts, product, ofi, ofi_ema)
-     values (now(), $1, $2, $3)`,
-    [product, ofi, ofiEma]
+    `insert into ofi_ticks(product, ofi, ofi_ema) values ($1,$2,$3)`,
+    [ENV.PRODUCT_ID, row.ofi ?? 0, row.ofi_ema ?? 0]
   );
 }
 
@@ -1063,11 +1062,19 @@ async function domTick() {
 globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
 globalThis._persistDOM   = async (row) => persistDOM(row);
 globalThis._persistCVD   = async (row) => persistCVD(row);
+globalThis._persistOFI   = async (row) => persistOFI(row);
 
 setInterval(domTick, DOM_POLL_MS);
 console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
 
-/* ------------------- CVD via WS + EMA heartbeat ------------------- */
+/* -------------------------- OFI state -------------------------- */
+const OFI_EMA_LEN = ENV.OFI_EMA_LEN || 34;
+const alphaOFI = 2 / (OFI_EMA_LEN + 1);
+
+let lastDom = null;          // previous DOM snapshot (for deltas)
+let ofiEma  = 0;             // running EMA of OFI
+
+/*------------------- CVD via WS + EMA heartbeat ------------------- */
 const CVD_EMA_LEN = ENV.CVD_EMA_LEN;
 const alpha = 2 / (CVD_EMA_LEN + 1);
 
