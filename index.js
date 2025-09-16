@@ -122,7 +122,7 @@ async function dbInit() {
     create table if not exists events (
       id        bigserial primary key,
       ts        timestamptz not null default now(),
-      kind      text not null,       -- 'aplus' | 'dom' | 'cvd' | 'audit' | 'prune'
+      kind      text not null,
       product   text,
       payload   jsonb,
       note      text
@@ -136,13 +136,21 @@ async function dbInit() {
       product     text not null,
       symbol      text,
       tf          text,
-      dir         text,              -- LONG | SHORT
+      dir         text,
       price       double precision,
       score       int,
       spider_rej  boolean,
       reasons     text
     );
   `);
+
+  // Extend aplus_signals with regime fields (idempotent)
+  await pg.query(`
+    alter table if exists aplus_signals
+      add column if not exists regime text,
+      add column if not exists regime_conf double precision
+  `);
+  await pg.query(`create index if not exists idx_aplus_regime on aplus_signals(regime)`);
 
   await pg.query(`
     create table if not exists dom_snapshots (
@@ -167,25 +175,8 @@ async function dbInit() {
     );
   `);
 
-// --- Trade feedback: ensure table, columns, and indexes
-await pg.query(`
-  create table if not exists trade_feedback (
-    id bigserial primary key,
-    ts timestamptz not null default now()
-  );
-`);
+  // --- Trade feedback (your existing block here)
 
-await pg.query(`
-  alter table if exists trade_feedback
-    add column if not exists signal_id bigint,
-    add column if not exists outcome   text,
-    add column if not exists rr        double precision,
-    add column if not exists notes     text
-`);
-
-await pg.query(`create index if not exists idx_feedback_ts     on trade_feedback(ts desc)`);
-await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
-  
   // Indexes
   await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
   await pg.query(`create index if not exists idx_events_kind    on events(kind)`);
@@ -193,6 +184,7 @@ await pg.query(`create index if not exists idx_feedback_signal on trade_feedback
   await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc)`);
   await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc)`);
   await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc)`);
+  await pg.query(`create index if not exists idx_feedback_ts    on trade_feedback(ts desc)`);
 
   console.log("📦 DB schema ready.");
 }
