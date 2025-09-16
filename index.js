@@ -197,6 +197,14 @@ await pg.query(`create index if not exists idx_feedback_signal on trade_feedback
   console.log("📦 DB schema ready.");
 }
 
+  // Extend aplus_signals with regime fields (idempotent)
+  await pg.query(`
+    alter table if exists aplus_signals
+      add column if not exists regime text,
+      add column if not exists regime_conf double precision
+  `);
+  await pg.query(`create index if not exists idx_aplus_regime on aplus_signals(regime)`);
+
 async function persistEvent(kind, payload, note = null) {
   await pg.query(
     `insert into events(kind, product, payload, note) values ($1,$2,$3,$4)`,
@@ -204,13 +212,13 @@ async function persistEvent(kind, payload, note = null) {
   );
 }
 async function persistAPlus(compact) {
-  const { s, f, d, p, sc, sr, R } = compact || {};
+  const { s, f, d, p, sc, sr, R, regime: rg, regime_conf: rc } = compact || {};
   const dirUC = d ? String(d).toUpperCase() : null;
   const symUC = s ? String(s).toUpperCase() : null;
 
   await pg.query(
-    `insert into aplus_signals(product, symbol, tf, dir, price, score, spider_rej, reasons)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    `insert into aplus_signals(product, symbol, tf, dir, price, score, spider_rej, reasons, regime, regime_conf)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       ENV.PRODUCT_ID,
       symUC,
@@ -220,6 +228,8 @@ async function persistAPlus(compact) {
       Number.isFinite(Number(sc)) ? Number(sc) : null,
       !!sr,
       typeof R === "string" ? R : null,
+      rg != null ? String(rg) : null,
+      Number.isFinite(Number(rc)) ? Number(rc) : null,
     ]
   );
 }
@@ -280,6 +290,33 @@ async function isDupeOrCooling(p) {
     [ENV.PRODUCT_ID, String(p.d).toUpperCase(), +p.p - epsilon, +p.p + epsilon]
   );
   return rows.length > 0;
+}
+
+// ---------- Regime helpers (server enforces ONLY if enabled) ----------
+function _parseRegimeFlags(r) {
+  const s = (r || "").toString().toLowerCase();
+  return {
+    bull: /bull|up|accum/.test(s),
+    bear: /bear|down|distrib/.test(s),
+    side: /side|flat|neutral|range/.test(s),
+  };
+}
+function dirAllowedByRegime(dir, regime, conf, opts) {
+  const { requireOk, sidewaysOnly, minConf } = opts || {};
+  if (!requireOk) return true;                 // enforcement disabled → always allow
+  if (regime == null) return true;            // no regime provided → allow
+  if (Number.isFinite(minConf) && Number(conf) < minConf) return true; // low conf → allow
+
+  const d = String(dir || "").toUpperCase();
+  const r = _parseRegimeFlags(regime);
+
+  if (sidewaysOnly) {
+    // Only block sideways/neutral regimes; let bull/bear pass
+    return !r.side;
+  }
+  if (d === "LONG")  return r.bull;
+  if (d === "SHORT") return r.bear;
+  return true;
 }
 
 /* ---------- Symbol normalizer → coerce to ENV.PRODUCT_ID ---------- */
@@ -478,6 +515,53 @@ app.get("/perf", async (req, res) => {
   }
 });
 console.log("🧮 KPIs route enabled: GET /perf");
+
+/* ----------------------------- KPIs by Regime ----------------------------- */
+app.get("/perf/by_regime", async (req, res) => {
+  try {
+    const days      = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
+    const minScore  = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
+    const dirFilter = (req.query.dir || "").toUpperCase(); // LONG | SHORT | ""
+
+    const where = [`tf.ts >= now() - interval '${days} days'`];
+    if (dirFilter === "LONG" || dirFilter === "SHORT") {
+      where.push(`coalesce(asig.dir, '') = '${dirFilter}'`);
+    }
+    const joinScore =
+      minScore != null
+        ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= ${minScore}`
+        : `left join aplus_signals asig on asig.id = tf.signal_id`;
+
+    const sql = `
+      with t as (
+        select coalesce(asig.regime, 'NA') as regime, tf.rr
+        from trade_feedback tf
+        ${joinScore}
+        where ${where.join(" and ")}
+      )
+      select regime,
+             count(*)::int as n,
+             avg(case when rr>0 then 1 else 0 end)::float as hit_rate,
+             avg(rr)::float as exp_rr
+      from t
+      group by regime
+      order by regime
+    `;
+    const rows = (await pg.query(sql)).rows;
+
+    res.json({
+      ok: true,
+      window_days: days,
+      filter: { min_score: minScore, dir: dirFilter || "ALL" },
+      by_regime: rows,
+      generated_at: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error("[/perf/by_regime] error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+console.log("🧮 Regime perf route enabled: GET /perf/by_regime");
 
 /* ------------------------- RETENTION (GET) ------------------------ */
 // token via header `X-Auth-Token` or query `?token=...`
@@ -687,10 +771,35 @@ if (!gate.ok) {
   return res.status(202).json({ ok: true, skipped: "DOM/CVD" });
 }
 
-await persistEvent("audit", { route: "/aplus", gate: "CLEARED", dir: gate.details.dir, cvd_ema: gate.details.cvd_ema }, "dom-cvd-cleared");
+await persistEvent(
+  "audit",
+  { route: "/aplus", gate: "CLEARED", dir: gate.details.dir, cvd_ema: gate.details.cvd_ema },
+  "dom-cvd-cleared"
+);
 
-    // ---- 4) Persist A+ signal, then optional Zapier relay
-    await persistAPlus(parsed);
+// ---- 3b) Regime shadow-gate (LOG what we *would* do; do NOT block)
+const rg = parsed.regime ?? null;
+const rc = parsed.regime_conf ?? null;
+const wouldAllow = dirAllowedByRegime(parsed.d, rg, rc, {
+  requireOk: true, // evaluate as-if enforcement ON
+  sidewaysOnly: ENV.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY,
+  minConf: ENV.MIN_REGIME_CONF,
+});
+await persistEvent(
+  "audit",
+  {
+    route: "/aplus",
+    shadow: "regime",
+    regime: rg,
+    regime_conf: rc,
+    dir: parsed.d,
+    would_block: !wouldAllow
+  },
+  "regime-shadow"
+);
+
+// ---- 4) Persist A+ signal, then optional Zapier relay
+await persistAPlus(parsed);
 
 /* ---------- Optional Zapier forward ---------- */
 if (ENV.ZAP_B_URL) {
@@ -1231,6 +1340,11 @@ app.get("/env", (_req, res) => {
         MAX_CVD_AGE_MS: ENV.MAX_CVD_AGE_MS,
         COOLDOWN_SEC: ENV.COOLDOWN_SEC,
 
+                // Regime
+        REQUIRE_REGIME_OK: ENV.REQUIRE_REGIME_OK,
+        REQUIRE_REGIME_FOR_SIDEWAYS_ONLY: ENV.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY,
+        MIN_REGIME_CONF: ENV.MIN_REGIME_CONF,
+        
         // Ops
         PRUNE_DAYS: ENV.PRUNE_DAYS,
         CRONITOR_URL: !!ENV.CRONITOR_URL,
