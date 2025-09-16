@@ -745,7 +745,22 @@ app.post("/aplus", async (req, res) => {
     }
 
     // --- normalize symbol to your server’s PRODUCT_ID
+    const rawSym = parsed.s; // keep original
     parsed.s = normalizeToProductId(parsed.s, ENV.PRODUCT_ID);
+
+    // Optional: hard-verify base/quote match to avoid misroutes
+    const toBQ = (s) => {
+      if (!s || !s.includes("-")) return { b: null, q: null };
+      const [b,q] = s.toUpperCase().split("-");
+      return { b, q };
+    };
+    const wantBQ = toBQ(ENV.PRODUCT_ID);
+    const rawBQ  = toBQ((rawSym || "").toString().replace("USDT","USD").replace(/^XBT-/, "BTC-"));
+
+    if (wantBQ.b && rawBQ.b && (wantBQ.b !== rawBQ.b || wantBQ.q !== rawBQ.q)) {
+      await persistEvent("audit", { route: "/aplus", raw: rawSym, want: ENV.PRODUCT_ID }, "symbol-mismatch-skip");
+      return res.status(202).json({ ok: true, skipped: "symbol_mismatch" });
+    }
 
     // ---- 1) Payload validation (fast fail)
     const v = validateAPlus(parsed);
