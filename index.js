@@ -22,17 +22,15 @@ const ENV = {
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
   // Poll/EMA tuning
-  DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "6000", 10)),
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)), // 8–10s is fine
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
   OFI_EMA_LEN: Math.max(2, parseInt(process.env.OFI_EMA_LEN || "34", 10)),     // NEW
 
-  MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "20000", 10), // DOM row ≤ 20s old
+  // Freshness thresholds
   MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "30000", 10), // 30s
-  MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "20000", 10), // CVD row ≤ 20s old
   MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "30000", 10), // 30s
 
-  COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "0", 10), // optional per-dir cooldown
+  // Cooldown (per-direction)
   COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "300", 10), // 5 minutes
 
   // Impact-aware sizing thresholds (override via env if you like)
