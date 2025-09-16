@@ -31,6 +31,14 @@ const ENV = {
   MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "20000", 10), // DOM row ≤ 20s old
   MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "20000", 10), // CVD row ≤ 20s old
   COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "0", 10), // optional per-dir cooldown
+
+  // Regime gating (single brain lives in strategy; server only enforces *if* enabled)
+  // Defaults are SAFE: shadow-log only (no blocking).
+  REQUIRE_REGIME_OK: (process.env.REQUIRE_REGIME_OK ?? "false").toLowerCase() === "true",
+  REQUIRE_REGIME_FOR_SIDEWAYS_ONLY: (process.env.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY ?? "false").toLowerCase() === "true",
+  MIN_REGIME_CONF: Number.isFinite(parseFloat(process.env.MIN_REGIME_CONF))
+    ? parseFloat(process.env.MIN_REGIME_CONF)
+    : null,
   
   // Retention window used by nightly prune
   PRUNE_DAYS: Math.max(1, parseInt(process.env.PRUNE_DAYS || "14", 10)),
@@ -59,6 +67,9 @@ const ENV = {
     dom_poll_ms: ENV.DOM_POLL_MS,
     cvd_ema_len: ENV.CVD_EMA_LEN,
     prune_days: ENV.PRUNE_DAYS,
+    regime_gate: ENV.REQUIRE_REGIME_OK,
+    regime_sideways_only: ENV.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY,
+    min_regime_conf: ENV.MIN_REGIME_CONF,
     tv_guard: !!ENV.TV_API_KEY,
     zap_relay: !!ENV.ZAP_B_URL,
     dom_fanout: !!ENV.ZAP_DOM_URL,
