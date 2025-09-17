@@ -1252,7 +1252,7 @@ async function domTick() {
     // carry current DOM → next iteration baseline
     lastDom = row;
   
-      // Optional fan-out
+  // Optional fan-out
   if (ZAP_DOM_URL) {
     try {
       const zr = await fetch(ZAP_DOM_URL, {
@@ -1265,8 +1265,8 @@ async function domTick() {
       });
       if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
     } catch (e) {
-      console.error("DOM fan-out error:", e.message);
-      // no res in domTick; swallow and continue
+      console.warn("DOM fan-out error:", e.message);
+      // do not throw; domTick is a poller, not an HTTP handler
     }
   }
 }
