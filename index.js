@@ -558,47 +558,112 @@ app.get("/perf", async (req, res) => {
 console.log("🧮 KPIs route enabled: GET /perf");
 
 /* ----------------------------- KPIs by Regime ----------------------------- */
-app.get("/perf/by_regime", async (req, res) => {
+app.get("/perf", async (req, res) => {
   try {
-    const days      = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
-    const minScore  = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
+    const minScore = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
     const dirFilter = (req.query.dir || "").toUpperCase(); // LONG | SHORT | ""
 
-    const where = [`tf.ts >= now() - interval '${days} days'`];
-    if (dirFilter === "LONG" || dirFilter === "SHORT") {
-      where.push(`coalesce(asig.dir, '') = '${dirFilter}'`);
-    }
-    const joinScore =
-      minScore != null
-        ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= ${minScore}`
-        : `left join aplus_signals asig on asig.id = tf.signal_id`;
+    // build safe param list and where clauses
+    const params = [days];
+    const whereClauses = ["tf.ts >= now() - interval '$1 days'"]; // we will replace $1 manually in SQL below
 
-    const sql = `
+    // direction filter handled via parameter
+    if (dirFilter === "LONG" || dirFilter === "SHORT") {
+      params.push(dirFilter);
+      whereClauses.push(`coalesce(asig.dir, '') = $${params.length}`);
+    }
+
+    // score filter will be applied in the join condition (use text concat for join but paramize score)
+    const joinScore = minScore != null
+      ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= $${params.length + 1}`
+      : `left join aplus_signals asig on asig.id = tf.signal_id`;
+
+    if (minScore != null) params.push(minScore);
+
+    // Note: postgres interval accepts literal, so use a simple replace for days in this known-safe context
+    const sinceInterval = `now() - interval '${days} days'`;
+
+    // Core KPIs (parameterized for dir/score via join and where)
+    const coreSql = `
       with t as (
-        select coalesce(asig.regime, 'NA') as regime, tf.rr
+        select
+          tf.ts,
+          tf.rr,
+          tf.outcome,
+          asig.dir,
+          asig.symbol,
+          asig.score
         from trade_feedback tf
         ${joinScore}
-        where ${where.join(" and ")}
+        where tf.ts >= ${sinceInterval}
+        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $1` : ""}
       )
-      select regime,
+      select
+        count(*)::int                                              as trades,
+        avg(case when rr > 0 then 1 else 0 end)::float            as hit_rate,
+        avg(rr)::float                                            as expectancy_rr,
+        sum(case when rr > 0 then rr else 0 end)
+          / nullif(abs(sum(case when rr <= 0 then rr else 0 end)), 0)::float
+                                                                  as profit_factor,
+        min(ts)                                                   as period_start,
+        max(ts)                                                   as period_end
+      from t
+    `;
+
+    const core = (await pg.query(coreSql, dirFilter === "LONG" || dirFilter === "SHORT" ? [dirFilter] : [])).rows[0];
+
+    // Breakdown by direction
+    const byDirSql = `
+      with t as (
+        select coalesce(asig.dir, 'NA') as dir, tf.rr
+        from trade_feedback tf
+        ${joinScore}
+        where tf.ts >= ${sinceInterval}
+        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $1` : ""}
+      )
+      select dir,
              count(*)::int as n,
              avg(case when rr>0 then 1 else 0 end)::float as hit_rate,
              avg(rr)::float as exp_rr
       from t
-      group by regime
-      order by regime
+      group by dir
+      order by dir
     `;
-    const rows = (await pg.query(sql)).rows;
+    const by_dir = (await pg.query(byDirSql, dirFilter === "LONG" || dirFilter === "SHORT" ? [dirFilter] : [])).rows;
+
+    // Score buckets
+    const byScoreSql = `
+      with t as (
+        select coalesce(asig.score, 0) as score, tf.rr
+        from trade_feedback tf
+        ${joinScore}
+        where tf.ts >= ${sinceInterval}
+        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $1` : ""}
+      )
+      select
+        width_bucket(score, 0, 100, 5) as bucket,
+        count(*)::int                   as n,
+        round(avg(score)::numeric, 1)   as avg_score,
+        avg(case when rr>0 then 1 else 0 end)::float as hit_rate,
+        avg(rr)::float as exp_rr
+      from t
+      group by bucket
+      order by bucket
+    `;
+    const by_score_bucket = (await pg.query(byScoreSql, dirFilter === "LONG" || dirFilter === "SHORT" ? [dirFilter] : [])).rows;
 
     res.json({
       ok: true,
       window_days: days,
       filter: { min_score: minScore, dir: dirFilter || "ALL" },
-      by_regime: rows,
+      core,
+      by_dir,
+      by_score_bucket,
       generated_at: new Date().toISOString()
     });
   } catch (e) {
-    console.error("[/perf/by_regime] error:", e.message);
+    console.error("[/perf] error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
