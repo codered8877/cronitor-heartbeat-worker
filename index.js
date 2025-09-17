@@ -925,6 +925,23 @@ await persistEvent(
   "regime-shadow"
 );
 
+// ---- 3c) Optional real enforcement (enabled via env)
+if (ENV.REQUIRE_REGIME_OK) {
+  const allow = dirAllowedByRegime(parsed.d, rg, rc, {
+    requireOk: true,
+    sidewaysOnly: ENV.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY,
+    minConf: ENV.MIN_REGIME_CONF,
+  });
+  if (!allow) {
+    await persistEvent(
+      "audit",
+      { route: "/aplus", regime: rg, regime_conf: rc, dir: parsed.d },
+      "regime-block"
+    );
+    return res.status(202).json({ ok: true, skipped: "regime_gate" });
+  }
+}
+    
 // ---- 4) Persist A+ signal, then optional Zapier relay
 await persistAPlus(parsed);
 
