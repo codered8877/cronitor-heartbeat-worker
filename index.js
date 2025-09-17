@@ -609,22 +609,20 @@ console.log("🧮 Regime perf route enabled: GET /perf/by_regime");
 const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
 
 app.get("/retention", async (req, res) => {
-  const tables = ["aplus_signals","events","dom_snapshots","cvd_ticks","ofi_ticks","trade_feedback"];
+  const token = req.get("X-Auth-Token") || req.query.token;
   if (!RETENTION_TOKEN || token !== RETENTION_TOKEN) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
-  // use your canonical table names
   const plan = [
-    { table: "aplus_signals", interval: `${ENV.PRUNE_DAYS} days` },
-    { table: "events",        interval: "30 days"  },
-    { table: "dom_snapshots", interval: "14 days"  },
-    { table: "cvd_ticks",     interval: "14 days"  },
-    { table: "trade_feedback",interval: "365 days" },
-    { table: "cvd_ticks",     interval: "14 days"  },
-    { table: "ofi_ticks",     interval: "14 days"  },
+    { table: "aplus_signals",  interval: `${ENV.PRUNE_DAYS} days` },
+    { table: "events",         interval: "30 days"  },
+    { table: "dom_snapshots",  interval: "14 days"  },
+    { table: "cvd_ticks",      interval: "14 days"  },
+    { table: "ofi_ticks",      interval: "14 days"  },
+    { table: "trade_feedback", interval: "365 days" },
   ];
-  const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
+  const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "ofi_ticks", "trade_feedback"];
 
   const result = { ok: true, deleted: {}, skipped: [], vacuumed: [] };
   const client = await pg.connect();
