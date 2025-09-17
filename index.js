@@ -719,7 +719,7 @@ app.get("/backup/check", async (req, res) => {
     if (!BACKUP_TOKEN || token !== BACKUP_TOKEN) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
-    const tables = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "trade_feedback"];
+    const tables = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "ofi_ticks", "trade_feedback"];
     const summary = {};
     for (const t of tables) {
       const { rows: c } = await pg.query(`select count(*)::int as n from ${t}`);
