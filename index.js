@@ -1245,7 +1245,7 @@ async function domTick() {
     // carry current DOM → next iteration baseline
     lastDom = row;
   
-  // Optional fan-out
+    // Optional fan-out
   if (ZAP_DOM_URL) {
     try {
       const zr = await fetch(ZAP_DOM_URL, {
@@ -1258,11 +1258,11 @@ async function domTick() {
       });
       if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
     } catch (e) {
-      console.error("[/perf/by_regime] error:", e.message);
-      return res.status(500).json({ ok: false, error: e.message });
+      console.error("DOM fan-out error:", e.message);
+      // (no res here; just log and continue)
     }
+  }
 }
-
 /* -------------------------- OFI state -------------------------- */
 const OFI_EMA_LEN = ENV.OFI_EMA_LEN || 34;
 const alphaOFI = 2 / (OFI_EMA_LEN + 1);
