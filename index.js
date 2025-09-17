@@ -1,4 +1,4 @@
-// index.js — APlus pipeline (Part 1/3)
+p// index.js — APlus pipeline (Part 1/3)
 // Node 18+ (global fetch). package.json must include { "type": "module" }.
 
 import express from "express";
@@ -1235,8 +1235,8 @@ async function domTick() {
       if (askDn) ofiInst += Math.abs(dAsk);
       else if (askUp) ofiInst -= Math.abs(dAsk);
 
-      // EMA of instantaneous OFI
-      ofiEma = (ofiEma === 0 ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma);
+      // EMA of instantaneous OFI (null until seeded)
+      ofiEma = ofiEma === null ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma;
 
       // Persist OFI tick + light audit
       const ofiRow = { ofi: ofiInst, ofi_ema: +ofiEma.toFixed(6) };
