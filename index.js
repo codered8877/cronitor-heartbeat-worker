@@ -712,6 +712,11 @@ app.get("/retention", async (req, res) => {
 
   try {
     await client.query("begin");
+
+    const plan = tables
+      .filter(t => t.windowed)
+      .map(t => ({ table: t.name, interval: `${ENV.PRUNE_DAYS} days` }));
+
     for (const { table, interval } of plan) await safeDelete(table, interval);
     for (const t of vacuums) await safeVacuum(t);
     await client.query("commit");
