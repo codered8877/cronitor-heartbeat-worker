@@ -1271,7 +1271,7 @@ async function domTick() {
       });
       if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
     } catch (e) {
-      console.warn("DOM fan-out error:", e.message);
+      console.error("[/perf/by_regime] error:", e.message);
     }
   }
 }
