@@ -563,7 +563,6 @@ app.get("/perf", async (req, res) => {
 console.log("🧮 KPIs route enabled: GET /perf");
 
 /* ----------------------------- KPIs by Regime ----------------------------- */
-/* ----------------------------- KPIs by Regime ----------------------------- */
 app.get("/perf/by_regime", async (req, res) => {
   try {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
@@ -578,12 +577,13 @@ app.get("/perf/by_regime", async (req, res) => {
       ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= $1`
       : `left join aplus_signals asig on asig.id = tf.signal_id`;
 
-    // Build params array per query: dir first (if present), then score (if present)
+    // Build params per query in the same order the SQL expects:
+    // score is $1 (if present), then dir (if present)
     const baseParams = [];
-    if (dirFilter === "LONG" || dirFilter === "SHORT") baseParams.push(dirFilter);
     if (minScore != null) baseParams.push(minScore);
+    if (dirFilter === "LONG" || dirFilter === "SHORT") baseParams.push(dirFilter);
 
-    // If score occupies $1 in the JOIN, the dir filter must shift to $2
+    // If score is present it's $1, so dir becomes $2; otherwise dir is $1
     const dirParamIndex = (dirFilter === "LONG" || dirFilter === "SHORT")
       ? (minScore != null ? 2 : 1)
       : null;
