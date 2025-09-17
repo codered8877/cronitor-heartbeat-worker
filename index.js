@@ -1288,6 +1288,7 @@ const alphaOFI = 2 / (OFI_EMA_LEN + 1);
 let lastDom = null;          // previous DOM snapshot (for deltas)
 // Use `null` as warmup sentinel so a first 0-value is handled correctly
 let ofiEma  = null;          // running EMA of OFI (null until seeded)
+let domTickRunning = false;  // reentrancy guard for the poller
 
 /* ---------------- Bridge helpers to Part 1 ---------------- */
 globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
