@@ -745,6 +745,7 @@ app.get("/backup", async (req, res) => {
       { name: "events",        windowed: true,  ts: "ts" },
       { name: "dom_snapshots", windowed: true,  ts: "ts" },
       { name: "cvd_ticks",     windowed: true,  ts: "ts" },
+      { name: "ofi_ticks",     windowed: true,  ts: "ts" },
       { name: "trade_feedback",windowed: false, ts: "ts" },
     ];
 
