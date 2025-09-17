@@ -1205,15 +1205,18 @@ async function fetchDOM() {
 }
 
 async function domTick() {
-  const row = await fetchDOM();
-  if (!row) return;
-
+  if (domTickRunning) return;   // skip if a previous tick is still running
+  domTickRunning = true;
   try {
-    await globalThis._persistEvent("dom", row, "poll");
-    await globalThis._persistDOM(row);
-  } catch (e) {
-    console.warn("DOM persist error:", e.message);
-  }
+    const row = await fetchDOM();
+    if (!row) return;
+
+    try {
+      await globalThis._persistEvent("dom", row, "poll");
+      await globalThis._persistDOM(row);
+    } catch (e) {
+      console.warn("DOM persist error:", e.message);
+    }
 
     // --- Compute OFI from successive DOM snapshots (simple microstructure proxy)
     if (lastDom) {
@@ -1222,14 +1225,13 @@ async function domTick() {
       const qBidNow = Number(row.q_bid ?? 0),  qBidPrev = Number(lastDom.q_bid ?? 0);
       const qAskNow = Number(row.q_ask ?? 0),  qAskPrev = Number(lastDom.q_ask ?? 0);
 
-      const dBid = qBidNow - qBidPrev;                    // depth change at best bid
-      const dAsk = qAskNow - qAskPrev;                    // depth change at best ask
+      const dBid = qBidNow - qBidPrev;
+      const dAsk = qAskNow - qAskPrev;
       const bidUp = pBidNow > pBidPrev;
       const bidDn = pBidNow < pBidPrev;
       const askDn = pAskNow < pAskPrev;
       const askUp = pAskNow > pAskPrev;
 
-      // Sign depth changes by whether the quote moved “in” (more aggressive) or “out”
       let ofiInst = 0;
       if (bidUp) ofiInst += Math.abs(dBid);
       else if (bidDn) ofiInst -= Math.abs(dBid);
@@ -1238,9 +1240,7 @@ async function domTick() {
       else if (askUp) ofiInst -= Math.abs(dAsk);
 
       ofiEma = (ofiEma === null) ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma;
-      
-        
-      // Persist OFI tick + light audit
+
       const ofiRow = {
         ofi: ofiInst,
         ofi_ema: ofiEma == null ? null : +ofiEma.toFixed(6)
@@ -1251,23 +1251,34 @@ async function domTick() {
 
     // carry current DOM → next iteration baseline
     lastDom = row;
-  
-  // Optional fan-out
-  if (ZAP_DOM_URL) {
-    try {
-      const zr = await fetch(ZAP_DOM_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ZAP_DOM_API_KEY ? { "x-api-key": ZAP_DOM_API_KEY } : {}),
-        },
-        body: JSON.stringify(row),
-      });
-      if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
-    } catch (e) {
-      console.warn("DOM fan-out error:", e.message);
-      // do not throw; domTick is a poller, not an HTTP handler
+
+    // Optional fan-out (poller context: never throw; add hard timeout)
+    if (ZAP_DOM_URL) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 3000); // 3s hard cap
+      try {
+        const zr = await fetch(ZAP_DOM_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ZAP_DOM_API_KEY ? { "x-api-key": ZAP_DOM_API_KEY } : {}),
+          },
+          body: JSON.stringify(row),
+          signal: ac.signal,
+        });
+        if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
+      } catch (e) {
+        if (e.name === "AbortError") {
+          console.warn("DOM fan-out timeout (3s) — skipped");
+        } else {
+          console.warn("DOM fan-out error:", e.message);
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     }
+  } finally {
+    domTickRunning = false;     // always release the lock
   }
 }
 /* -------------------------- OFI state -------------------------- */
