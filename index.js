@@ -454,7 +454,8 @@ async function gateDomCvd(parsed) {
 const app = express();
 // TV mobile sometimes posts text/plain
 app.use(express.json({ limit: "1mb", type: ["application/json", "text/json"] }));
-app.use(express.text({ limit: "1mb", type: ["text/*", "application/x-www-form-urlencoded"] }));
+app.use(express.text({ limit: "1mb", type: ["text/plain"] }));         // plain text only
+app.use(express.urlencoded({ limit: "1mb", extended: false }));        // proper form parser for TV form posts
 
 /* ----------------------------- KPIs (/perf) ----------------------------- */
 app.get("/perf", async (req, res) => {
