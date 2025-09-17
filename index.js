@@ -614,14 +614,14 @@ app.get("/retention", async (req, res) => {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
-  const plan = [
-    { table: "aplus_signals",  interval: `${ENV.PRUNE_DAYS} days` },
-    { table: "events",         interval: "30 days"  },
-    { table: "dom_snapshots",  interval: "14 days"  },
-    { table: "cvd_ticks",      interval: "14 days"  },
-    { table: "ofi_ticks",      interval: "14 days"  },
-    { table: "trade_feedback", interval: "365 days" },
-  ];
+  const tables = [
+  { name: "aplus_signals", windowed: true,  ts: "ts" },
+  { name: "events",        windowed: true,  ts: "ts" },
+  { name: "dom_snapshots", windowed: true,  ts: "ts" },
+  { name: "cvd_ticks",     windowed: true,  ts: "ts" },
+  { name: "ofi_ticks",     windowed: true,  ts: "ts" },   // ← add this line
+  { name: "trade_feedback",windowed: false, ts: "ts" },
+];
   const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "ofi_ticks", "trade_feedback"];
 
   const result = { ok: true, deleted: {}, skipped: [], vacuumed: [] };
