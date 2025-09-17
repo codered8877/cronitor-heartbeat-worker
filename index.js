@@ -1,4 +1,4 @@
-p// index.js — APlus pipeline (Part 1/3)
+// index.js — APlus pipeline (Part 1/3)
 // Node 18+ (global fetch). package.json must include { "type": "module" }.
 
 import express from "express";
