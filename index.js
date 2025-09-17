@@ -1270,7 +1270,8 @@ const OFI_EMA_LEN = ENV.OFI_EMA_LEN || 34;
 const alphaOFI = 2 / (OFI_EMA_LEN + 1);
 
 let lastDom = null;          // previous DOM snapshot (for deltas)
-let ofiEma  = 0;             // running EMA of OFI
+// Use `null` as warmup sentinel so a first 0-value is handled correctly
+let ofiEma  = null;          // running EMA of OFI (null until seeded)
 
 /* ---------------- Bridge helpers to Part 1 ---------------- */
 globalThis._persistEvent = async (kind, payload, note) => persistEvent(kind, payload, note);
