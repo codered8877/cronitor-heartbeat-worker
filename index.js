@@ -563,7 +563,7 @@ app.get("/perf", async (req, res) => {
 console.log("🧮 KPIs route enabled: GET /perf");
 
 /* ----------------------------- KPIs by Regime ----------------------------- */
-app.get("/perf", async (req, res) => {
+app.get("/perf/by_regime", async (req, res) => {
   try {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
     const minScore = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
@@ -1244,7 +1244,8 @@ async function domTick() {
       null
         ? ofiInst
         : ...
-
+      ofiEma = (ofiEma === null) ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma;
+        
       // Persist OFI tick + light audit
       const ofiRow = {
         ofi: ofiInst,
