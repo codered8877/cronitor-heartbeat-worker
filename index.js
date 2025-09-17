@@ -563,23 +563,30 @@ app.get("/perf", async (req, res) => {
 console.log("🧮 KPIs route enabled: GET /perf");
 
 /* ----------------------------- KPIs by Regime ----------------------------- */
+/* ----------------------------- KPIs by Regime ----------------------------- */
 app.get("/perf/by_regime", async (req, res) => {
   try {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
     const minScore = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
     const dirFilter = (req.query.dir || "").toUpperCase(); // LONG|SHORT|""
 
+    // Interval literal is safe here (bounded int)
     const sinceInterval = `now() - interval '${days} days'`;
 
-    // Build JOIN with an extra param only if minScore is present
+    // JOIN with optional score filter; parameter index for score is $1 if present
     const joinScore = minScore != null
       ? `left join aplus_signals asig on asig.id = tf.signal_id and asig.score >= $1`
       : `left join aplus_signals asig on asig.id = tf.signal_id`;
 
-    // Helper to build params per query (dir first, then minScore if used)
-    const params = [];
-    if (dirFilter === "LONG" || dirFilter === "SHORT") params.push(dirFilter);
-    if (minScore != null) params.push(minScore);
+    // Build params array per query: dir first (if present), then score (if present)
+    const baseParams = [];
+    if (dirFilter === "LONG" || dirFilter === "SHORT") baseParams.push(dirFilter);
+    if (minScore != null) baseParams.push(minScore);
+
+    // If score occupies $1 in the JOIN, the dir filter must shift to $2
+    const dirParamIndex = (dirFilter === "LONG" || dirFilter === "SHORT")
+      ? (minScore != null ? 2 : 1)
+      : null;
 
     // Core
     const coreSql = `
@@ -588,7 +595,7 @@ app.get("/perf/by_regime", async (req, res) => {
         from trade_feedback tf
         ${joinScore}
         where tf.ts >= ${sinceInterval}
-        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $${minScore != null ? 2 : 1}` : ""}
+        ${dirParamIndex ? `and coalesce(asig.dir, '') = $${dirParamIndex}` : ""}
       )
       select
         count(*)::int as trades,
@@ -600,16 +607,16 @@ app.get("/perf/by_regime", async (req, res) => {
         max(ts) as period_end
       from t
     `;
-    const core = (await pg.query(coreSql, params)).rows[0];
+    const core = (await pg.query(coreSql, baseParams)).rows[0];
 
-    // by_dir
+    // By direction
     const byDirSql = `
       with t as (
         select coalesce(asig.dir,'NA') as dir, tf.rr
         from trade_feedback tf
         ${joinScore}
         where tf.ts >= ${sinceInterval}
-        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $${minScore != null ? 2 : 1}` : ""}
+        ${dirParamIndex ? `and coalesce(asig.dir, '') = $${dirParamIndex}` : ""}
       )
       select dir,
              count(*)::int as n,
@@ -619,16 +626,16 @@ app.get("/perf/by_regime", async (req, res) => {
       group by dir
       order by dir
     `;
-    const by_dir = (await pg.query(byDirSql, params)).rows;
+    const by_dir = (await pg.query(byDirSql, baseParams)).rows;
 
-    // by_score_bucket
+    // Score buckets
     const byScoreSql = `
       with t as (
-        select coalesce(asig.score,0) as score, tf.rr
+        select coalesce(asig.score, 0) as score, tf.rr
         from trade_feedback tf
         ${joinScore}
         where tf.ts >= ${sinceInterval}
-        ${dirFilter === "LONG" || dirFilter === "SHORT" ? `and coalesce(asig.dir, '') = $${minScore != null ? 2 : 1}` : ""}
+        ${dirParamIndex ? `and coalesce(asig.dir, '') = $${dirParamIndex}` : ""}
       )
       select
         width_bucket(score, 0, 100, 5) as bucket,
@@ -640,7 +647,7 @@ app.get("/perf/by_regime", async (req, res) => {
       group by bucket
       order by bucket
     `;
-    const by_score_bucket = (await pg.query(byScoreSql, params)).rows;
+    const by_score_bucket = (await pg.query(byScoreSql, baseParams)).rows;
 
     res.json({
       ok: true,
