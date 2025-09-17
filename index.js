@@ -568,7 +568,7 @@ app.get("/perf/by_regime", async (req, res) => {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
     const minScore = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
     const dirFilter = (req.query.dir || "").toUpperCase(); // LONG | SHORT | ""
-
+    
     // build safe param list and where clauses
     const params = [days];
     const whereClauses = ["tf.ts >= now() - interval '$1 days'"]; // we will replace $1 manually in SQL below
@@ -1246,11 +1246,8 @@ async function domTick() {
       if (askDn) ofiInst += Math.abs(dAsk);
       else if (askUp) ofiInst -= Math.abs(dAsk);
 
-      ofiEma = ofiEma ===
-      null
-        ? ofiInst
-        : ...
       ofiEma = (ofiEma === null) ? ofiInst : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma;
+      
         
       // Persist OFI tick + light audit
       const ofiRow = {
@@ -1278,8 +1275,8 @@ async function domTick() {
       if (!zr.ok) console.warn("DOM fan-out non-200:", zr.status);
     } catch (e) {
       console.error("[/perf/by_regime] error:", e.message);
+      return res.status(500).json({ ok: false, error: e.message });
     }
-  }
 }
 
 /* -------------------------- OFI state -------------------------- */
