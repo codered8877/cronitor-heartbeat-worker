@@ -568,7 +568,6 @@ app.get("/perf/by_regime", async (req, res) => {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days || "90", 10)));
     const minScore = Number.isFinite(+req.query.min_score) ? Math.trunc(+req.query.min_score) : null;
     const dirFilter = (req.query.dir || "").toUpperCase(); // LONG | SHORT | ""
-    
     // build safe param list and where clauses
     const params = [days];
     const whereClauses = ["tf.ts >= now() - interval '$1 days'"]; // we will replace $1 manually in SQL below
