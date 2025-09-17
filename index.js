@@ -1235,13 +1235,16 @@ async function domTick() {
       if (askDn) ofiInst += Math.abs(dAsk);
       else if (askUp) ofiInst -= Math.abs(dAsk);
 
-      // EMA of instantaneous OFI (null until seeded)
-      ofiEma = ofiEma === null
+      ofiEma = ofiEma ===
+      null
         ? ofiInst
-        : alphaOFI * ofiInst + (1 - alphaOFI) * ofiEma;
+        : ...
 
       // Persist OFI tick + light audit
-      const ofiRow = { ofi: ofiInst, ofi_ema: +ofiEma.toFixed(6) };
+      const ofiRow = {
+        ofi: ofiInst,
+        ofi_ema: ofiEma == null ? null : +ofiEma.toFixed(6)
+      };
       await globalThis._persistEvent("ofi", { ts: row.ts, ...ofiRow }, "calc");
       await globalThis._persistOFI(ofiRow);
     }
