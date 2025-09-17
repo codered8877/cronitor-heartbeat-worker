@@ -335,11 +335,16 @@ async function isDupeOrCooling(p) {
 // ---------- Regime helpers (server enforces ONLY if enabled) ----------
 function _parseRegimeFlags(r) {
   const s = (r || "").toString().toLowerCase();
-  return {
-    bull: /bull|up|accum/.test(s),
-    bear: /bear|down|distrib/.test(s),
-    side: /side|flat|neutral|range/.test(s),
-  };
+
+  // Treat common synonyms and analyst labels:
+  //  - Bull: bull/bullish, up, uptrend, trend up, accumulating, expansion/expanding
+  //  - Bear: bear/bearish, down, downtrend, trend down, distribution, contraction
+  //  - Side: sideways, flat, neutral, range/ranging, chop/choppy, consolidation, compression
+  const bull = /\b(bull|bullish|up|uptrend|trend\s*up|trending\s*up|accum|accumulation|expand|expansion|expanding)\b/.test(s);
+  const bear = /\b(bear|bearish|down|downtrend|trend\s*down|trending\s*down|distrib|distribution|contract|contraction)\b/.test(s);
+  const side = /\b(side|sideways|flat|neutral|range|ranging|chop|choppy|consol|consolidation|compress|compression)\b/.test(s);
+
+  return { bull, bear, side };
 }
 function dirAllowedByRegime(dir, regime, conf, opts) {
   const { requireOk, sidewaysOnly, minConf } = opts || {};
