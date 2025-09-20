@@ -100,8 +100,9 @@ const ENV = {
   });
 })();
 
-// --- PG CONFIG (accept POSTGRES_URL or DATABASE_URL or split vars)
+// --- PG CONFIG (accept POSTGRES_URL or DATABASE_URL or POSTGRES_* or PG_* )
 function buildPgConfig() {
+  // Prefer a single URL first
   const url =
     process.env.POSTGRES_URL?.trim() ||
     process.env.DATABASE_URL?.trim();
@@ -109,36 +110,32 @@ function buildPgConfig() {
   if (url) {
     return {
       connectionString: url,
-      ssl: { rejectUnauthorized: false }   // works with Render internal/external
+      ssl: { rejectUnauthorized: false } // works with Render external/internal
     };
   }
 
-  const {
-    POSTGRES_HOST,
-    POSTGRES_PORT,
-    POSTGRES_DB,
-    POSTGRES_USER,
-    POSTGRES_PASSWORD
-  } = process.env;
+  // Fall back to split vars (support both POSTGRES_* and PG_* names)
+  const host     = (process.env.POSTGRES_HOST || process.env.PGHOST)?.trim();
+  const port     = Number(process.env.POSTGRES_PORT || process.env.PGPORT);
+  const database = (process.env.POSTGRES_DB   || process.env.PGDATABASE)?.trim();
+  const user     = (process.env.POSTGRES_USER || process.env.PGUSER)?.trim();
+  const password = (process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD)?.trim();
 
-  if (POSTGRES_HOST && POSTGRES_PORT && POSTGRES_DB && POSTGRES_USER && POSTGRES_PASSWORD) {
+  if (host && port && database && user && password) {
     return {
-      host: POSTGRES_HOST.trim(),
-      port: Number(POSTGRES_PORT),
-      database: POSTGRES_DB.trim(),
-      user: POSTGRES_USER.trim(),
-      password: POSTGRES_PASSWORD.trim(),
+      host, port, database, user, password,
       ssl: { rejectUnauthorized: false }
     };
   }
 
-  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD.");
+  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD (or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD).");
 }
 
 // later, when creating the pool:
 import pkg from 'pg';
 const { Pool } = pkg;
 const pg = new Pool(buildPgConfig());
+
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
