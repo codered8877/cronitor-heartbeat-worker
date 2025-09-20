@@ -131,6 +131,8 @@ function buildPgConfig() {
   throw new Error("❌ No Postgres config. Provide POSTGRES_* fields or DATABASE_URL/POSTGRES_URL.");
 }
 
+const pg = new Pool(buildPgConfig());
+
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
