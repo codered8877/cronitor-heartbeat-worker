@@ -140,6 +140,44 @@ function buildPgConfig() {
   );
 }
 
+// --- PG CONFIG (accept POSTGRES_URL / DATABASE_URL or split vars incl. PG_*)
+function buildPgConfig() {
+  // prefer a single URL first
+  const url =
+    (process.env.POSTGRES_URL && process.env.POSTGRES_URL.trim()) ||
+    (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) ||
+    (process.env.INTERNAL_DATABASE_URL && process.env.INTERNAL_DATABASE_URL.trim());
+
+  if (url) {
+    return {
+      connectionString: url,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    };
+  }
+
+  // fall back to split vars – support both POSTGRES_* and PG_*
+  const host = (process.env.POSTGRES_HOST || process.env.PGHOST || "").trim();
+  const port = Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432);
+  const database = (process.env.POSTGRES_DB || process.env.PGDATABASE || "").trim();
+  const user = (process.env.POSTGRES_USER || process.env.PGUSER || "").trim();
+  const password = (process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "").trim();
+
+  if (host && database && user && password) {
+    return {
+      host, port, database, user, password,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    };
+  }
+
+  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD (or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD).");
+}
+
 const pg = new Pool(buildPgConfig());
 
 /* -------------------- Schema, indexes, helpers -------------------- */
