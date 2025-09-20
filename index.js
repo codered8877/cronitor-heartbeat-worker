@@ -164,8 +164,8 @@ async function dbInit() {
       reasons     text
     );
   `);
-
-    /* -------------------- RESEARCH TAGS -------------------- */
+  
+ /* -------------------- RESEARCH TAGS -------------------- */
   await pg.query(`
     create table if not exists research_tags (
       id           text primary key,                -- your tag.id
