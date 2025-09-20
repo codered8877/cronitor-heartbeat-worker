@@ -140,48 +140,43 @@ function buildPgConfig() {
   );
 }
 
-// --- PG CONFIG (prefer a single URL; fallback to split vars)
+// --- PG CONFIG (accept POSTGRES_URL / DATABASE_URL or split vars incl. PG_*)
 function buildPgConfig() {
-  // 1) URL first (you DO have POSTGRES_URL set)
+  // prefer a single URL first
   const url =
     (process.env.POSTGRES_URL && process.env.POSTGRES_URL.trim()) ||
-    (process.env.DATABASE_URL && process.env.DATABASE_URL.trim());
+    (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) ||
+    (process.env.INTERNAL_DATABASE_URL && process.env.INTERNAL_DATABASE_URL.trim());
 
   if (url) {
     return {
       connectionString: url,
-      // External Render PG uses valid certs; this works for both internal/external
       ssl: { rejectUnauthorized: false },
       max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
     };
   }
 
-  // 2) Fallback: split vars (support POSTGRES_* and PG_* names)
+  // fall back to split vars – support both POSTGRES_* and PG_*
   const host = (process.env.POSTGRES_HOST || process.env.PGHOST || "").trim();
-  const port = Number(process.env.POSTGRES_PORT || process.env.PGPORT || 0);
+  const port = Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432);
   const database = (process.env.POSTGRES_DB || process.env.PGDATABASE || "").trim();
   const user = (process.env.POSTGRES_USER || process.env.PGUSER || "").trim();
   const password = (process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "").trim();
 
-  if (host && port && database && user && password) {
+  if (host && database && user && password) {
     return {
       host, port, database, user, password,
       ssl: { rejectUnauthorized: false },
       max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
     };
   }
 
-  // 3) Nothing matched → real config error
-  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD.");
+  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD (or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD).");
 }
-
-// ONE pool. Do not import pg again lower in the file.
-const pg = new Pool(buildPgConfig());
-
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
