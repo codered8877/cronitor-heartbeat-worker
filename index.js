@@ -5,6 +5,70 @@ import express from "express";
 import { Pool } from "pg";
 import zlib from "zlib";
 
+// -------------------------------
+// Postgres Config Builder
+// -------------------------------
+
+// helper: first non-empty env var (trimmed)
+function pick(...names) {
+  for (const n of names) {
+    const v = process.env[n];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+// Build a pg Pool config from env
+function buildPgConfig() {
+  // 1) Prefer a single URL (Render supports postgres:// or postgresql://)
+  const DATABASE_URL = pick("DATABASE_URL", "POSTGRES_URL", "POSTGRESQL_URL", "INTERNAL_DATABASE_URL");
+  if (DATABASE_URL) {
+    return {
+      connectionString: DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    };
+  }
+
+  // 2) Or discrete fields (accept POSTGRES_* or PG*; either is fine)
+  const host = pick("POSTGRES_HOST", "PGHOST");
+  const portStr = pick("POSTGRES_PORT", "PGPORT") || "5432";
+  const user = pick("POSTGRES_USER", "PGUSER");
+  const password = pick("POSTGRES_PASSWORD", "PGPASSWORD");
+  const database = pick("POSTGRES_DB", "PGDATABASE");
+
+  if (host && user && password && database && portStr) {
+    return {
+      host,
+      port: parseInt(portStr, 10),
+      user,
+      password,
+      database,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    };
+  }
+
+  // last-resort: show what we saw, then fail
+  console.error("❌ PG preflight snapshot:", {
+    DATABASE_URL: !!DATABASE_URL,
+    POSTGRES_URL: !!process.env.POSTGRES_URL,
+    POSTGRESQL_URL: !!process.env.POSTGRESQL_URL,
+    INTERNAL_DATABASE_URL: !!process.env.INTERNAL_DATABASE_URL,
+    POSTGRES_HOST: !!process.env.POSTGRES_HOST, PGHOST: !!process.env.PGHOST,
+    POSTGRES_PORT: process.env.POSTGRES_PORT, PGPORT: process.env.PGPORT,
+    POSTGRES_DB: !!process.env.POSTGRES_DB, PGDATABASE: !!process.env.PGDATABASE,
+    POSTGRES_USER: !!process.env.POSTGRES_USER, PGUSER: !!process.env.PGUSER,
+    POSTGRES_PASSWORD: !!process.env.POSTGRES_PASSWORD, PGPASSWORD: !!process.env.PGPASSWORD,
+  });
+
+  throw new Error("❌ No Postgres config. Provide POSTGRES_* fields or DATABASE_URL/POSTGRES_URL.");
+}
+
 /* ------------------------------- ENV ------------------------------- */
 // helper: return the first non-empty env var (trimmed)
 function pick(...names) {
