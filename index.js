@@ -70,15 +70,6 @@ function buildPgConfig() {
 }
 
 /* ------------------------------- ENV ------------------------------- */
-// helper: return the first non-empty env var (trimmed)
-function pick(...names) {
-  for (const n of names) {
-    const v = process.env[n];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  return "";
-}
-
 const ENV = {
   // Core
   PRODUCT_ID: pick("PRODUCT_ID") || "BTC-USD",
