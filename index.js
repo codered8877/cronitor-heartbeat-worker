@@ -3,82 +3,143 @@
 
 // index.js (top of file)
 
-// 1) Imports// index.js (top of file)
+// index.js — APlus pipeline (top of file)
 import express from "express";
 import { Pool } from "pg";
 import zlib from "zlib";
 
-// -------------------------------
-// Postgres Config Builder
-// -------------------------------
+/* ------------------------------- ENV ------------------------------- */
+const ENV = {
+  // Core product (Coinbase product id)
+  PRODUCT_ID: process.env.PRODUCT_ID || "BTC-USD",
 
-// helper: first non-empty env var (trimmed)
-function pick(...names) {
-  for (const n of names) {
-    const v = process.env[n];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  return "";
-}
+  // TradingView webhook guard (optional). If set, we require header x-tv-key.
+  TV_API_KEY: process.env.TV_API_KEY || "",
 
-// Build a pg Pool config from env
-function buildPgConfig() {
-  // 1) Prefer a single URL (Render supports postgres:// or postgresql://)
-  const DATABASE_URL = pick(
-    "DATABASE_URL",
-    "POSTGRES_URL",
-    "POSTGRESQL_URL",
-    "INTERNAL_DATABASE_URL"
-  );
-  if (DATABASE_URL) {
-    return {
-      connectionString: DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    };
-  }
+  // Optional relay of compact A+ signals to Zapier
+  ZAP_B_URL:   process.env.ZAP_B_URL || "",
+  ZAP_API_KEY: process.env.ZAP_API_KEY || "",
 
-  // 2) Or discrete fields (POSTGRES_* or PG* both fine)
-  const host = pick("POSTGRES_HOST", "PGHOST");
-  const portStr = pick("POSTGRES_PORT", "PGPORT") || "5432";
-  const user = pick("POSTGRES_USER", "PGUSER");
-  const password = pick("POSTGRES_PASSWORD", "PGPASSWORD");
-  const database = pick("POSTGRES_DB", "PGDATABASE");
+  // Optional fan-out of DOM snapshots to an external endpoint
+  ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
+  ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
-  if (host && user && password && database && portStr) {
-    return {
-      host,
-      port: parseInt(portStr, 10),
-      user,
-      password,
-      database,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    };
-  }
+  // Poll/EMA tuning
+  DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)),
+  CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
+  OFI_EMA_LEN: Math.max(2, parseInt(process.env.OFI_EMA_LEN || "34", 10)),
 
-  // last-resort: show what we saw, then fail
-  console.error("❌ PG preflight snapshot:", {
-    DATABASE_URL: !!DATABASE_URL,
-    POSTGRES_URL: !!process.env.POSTGRES_URL,
-    POSTGRESQL_URL: !!process.env.POSTGRESQL_URL,
-    INTERNAL_DATABASE_URL: !!process.env.INTERNAL_DATABASE_URL,
-    POSTGRES_HOST: !!process.env.POSTGRES_HOST, PGHOST: !!process.env.PGHOST,
-    POSTGRES_PORT: process.env.POSTGRES_PORT, PGPORT: process.env.PGPORT,
-    POSTGRES_DB: !!process.env.POSTGRES_DB, PGDATABASE: !!process.env.PGDATABASE,
-    POSTGRES_USER: !!process.env.POSTGRES_USER, PGUSER: !!process.env.PGUSER,
-    POSTGRES_PASSWORD: !!process.env.POSTGRES_PASSWORD, PGPASSWORD: !!process.env.PGPASSWORD,
+  // Freshness thresholds
+  MAX_DOM_AGE_MS: parseInt(process.env.MAX_DOM_AGE_MS || "30000", 10),
+  MAX_CVD_AGE_MS: parseInt(process.env.MAX_CVD_AGE_MS || "30000", 10),
+
+  // Cooldown (per-direction)
+  COOLDOWN_SEC: parseInt(process.env.COOLDOWN_SEC || "300", 10),
+
+  // Impact-aware sizing thresholds
+  IMP_SPREAD_TIGHT_BPS: parseFloat(process.env.IMP_SPREAD_TIGHT_BPS || "1.5"),
+  IMP_SPREAD_WIDE_BPS:  parseFloat(process.env.IMP_SPREAD_WIDE_BPS  || "6"),
+  IMP_VOL_CALM_BPS:     parseFloat(process.env.IMP_VOL_CALM_BPS     || "5"),
+  IMP_VOL_TURB_BPS:     parseFloat(process.env.IMP_VOL_TURB_BPS     || "25"),
+
+  // Payload freshness (APlus payload timestamp)
+  MAX_AGE_MS: parseInt(process.env.MAX_AGE_MS || "180000", 10),
+
+  // Optional score threshold
+  MIN_SCORE:  parseInt(process.env.MIN_SCORE  || "0", 10),
+
+  // Regime gating flags
+  REQUIRE_REGIME_OK: (process.env.REQUIRE_REGIME_OK ?? "false").toLowerCase() === "true",
+  REQUIRE_REGIME_FOR_SIDEWAYS_ONLY: (process.env.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY ?? "false").toLowerCase() === "true",
+  MIN_REGIME_CONF: Number.isFinite(parseFloat(process.env.MIN_REGIME_CONF))
+    ? parseFloat(process.env.MIN_REGIME_CONF)
+    : null,
+
+  // Retention window
+  PRUNE_DAYS: Math.max(1, parseInt(process.env.PRUNE_DAYS || "14", 10)),
+
+  // Optional heartbeat
+  CRONITOR_URL: process.env.CRONITOR_URL || "",
+
+  // Postgres (prefer discrete fields; fallback to URL)
+  PGHOST:      process.env.POSTGRES_HOST || process.env.PGHOST || "",
+  PGPORT:      parseInt(process.env.POSTGRES_PORT || process.env.PGPORT || "5432", 10),
+  PGDATABASE:  process.env.POSTGRES_DB || process.env.PGDATABASE || "",
+  PGUSER:      process.env.POSTGRES_USER || process.env.PGUSER || "",
+  PGPASSWORD:  process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "",
+  DATABASE_URL:process.env.POSTGRES_URL || process.env.DATABASE_URL || "",
+
+  // HTTP
+  PORT: parseInt(process.env.PORT || "3000", 10),
+};
+
+// non-secret boot banner
+(function bootBanner() {
+  const usingFields = !!(ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE);
+  const usingURL    = !!ENV.DATABASE_URL;
+  console.log("🔧 Boot cfg:", {
+    product: ENV.PRODUCT_ID,
+    dom_poll_ms: ENV.DOM_POLL_MS,
+    cvd_ema_len: ENV.CVD_EMA_LEN,
+    max_dom_age_ms: ENV.MAX_DOM_AGE_MS,
+    max_cvd_age_ms: ENV.MAX_CVD_AGE_MS,
+    cooldown_sec: ENV.COOLDOWN_SEC,
+    prune_days: ENV.PRUNE_DAYS,
+    regime_gate: ENV.REQUIRE_REGIME_OK,
+    regime_sideways_only: ENV.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY,
+    min_regime_conf: ENV.MIN_REGIME_CONF,
+    tv_guard: !!ENV.TV_API_KEY,
+    zap_relay: !!ENV.ZAP_B_URL,
+    dom_fanout: !!ENV.ZAP_DOM_URL,
+    cronitor: !!ENV.CRONITOR_URL,
+    pg_mode: usingFields ? "fields" : usingURL ? "url" : "none",
+    port: ENV.PORT,
+    ofi_ema_len: ENV.OFI_EMA_LEN,
+    impact_cfg: {
+      tight: { spread_bps: ENV.IMP_SPREAD_TIGHT_BPS, vol_bps: ENV.IMP_VOL_CALM_BPS },
+      wide:  { spread_bps: ENV.IMP_SPREAD_WIDE_BPS,  vol_bps: ENV.IMP_VOL_TURB_BPS }
+    }
   });
+})();
 
-  throw new Error("❌ No Postgres config. Provide POSTGRES_* fields or DATABASE_URL/POSTGRES_URL.");
+// --- PG CONFIG (ENV-based; this is the original working one)
+function buildPgConfig() {
+  if (
+    ENV.PGHOST &&
+    ENV.PGUSER &&
+    ENV.PGDATABASE &&
+    ENV.PGPORT &&
+    ENV.PGPASSWORD
+  ) {
+    return {
+      host: ENV.PGHOST,
+      port: ENV.PGPORT,
+      user: ENV.PGUSER,
+      password: ENV.PGPASSWORD,
+      database: ENV.PGDATABASE,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    };
+  }
+
+  if (ENV.DATABASE_URL) {
+    return {
+      connectionString: ENV.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    };
+  }
+
+  throw new Error(
+    "❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL."
+  );
 }
 
-// one pool for the app
-const pool = new Pool(buildPgConfig());
+const pg = new Pool(buildPgConfig());
 
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
