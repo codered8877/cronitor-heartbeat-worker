@@ -165,6 +165,33 @@ async function dbInit() {
     );
   `);
 
+    /* -------------------- RESEARCH TAGS -------------------- */
+  await pg.query(`
+    create table if not exists research_tags (
+      id           text primary key,                -- your tag.id
+      created_at   timestamptz not null default now(),
+      created_by   text,                            -- "research" / "manual" / etc
+      topic        text not null,                   -- e.g. "macro/fomc"
+      label        text,
+      dir_hint     text,                            -- "bull" | "bear" | "sideways" | "none"
+      confidence   double precision,                -- 0..1
+      intensity    text,                            -- "low" | "med" | "high"
+      when_start   timestamptz,                     -- ISO in tag.when.start
+      when_end     timestamptz,                     -- ISO in tag.when.end
+      decay_half_life_min int,
+      source_name  text,
+      source_url   text,
+      notes        text,
+      checksum     text,
+      body         jsonb                            -- full raw tag
+    );
+  `);
+
+  // Helpful indexes (idempotent)
+  await pg.query(`create index if not exists idx_research_topic  on research_tags(topic)`);
+  await pg.query(`create index if not exists idx_research_window on research_tags(when_start, when_end)`);
+  await pg.query(`create index if not exists idx_research_created on research_tags(created_at desc)`);
+  
   // Extend aplus_signals with regime fields (idempotent)
   await pg.query(`
     alter table if exists aplus_signals
