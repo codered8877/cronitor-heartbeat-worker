@@ -3,12 +3,16 @@
 
 // index.js (top of file)
 
-// 1) Imports
+// 1) Imports// index.js (top of file)
 import express from "express";
 import { Pool } from "pg";
 import zlib from "zlib";
 
-// 2) Helper: first non-empty env var (only ONE copy of this!)
+// -------------------------------
+// Postgres Config Builder
+// -------------------------------
+
+// helper: first non-empty env var (trimmed)
 function pick(...names) {
   for (const n of names) {
     const v = process.env[n];
@@ -17,36 +21,15 @@ function pick(...names) {
   return "";
 }
 
-// 3) ENV (uses pick)
-const ENV = {
-  PRODUCT_ID: pick("PRODUCT_ID") || "BTC-USD",
-  TV_API_KEY: pick("TV_API_KEY"),
-  ZAP_B_URL: pick("ZAP_B_URL"),
-  ZAP_API_KEY: pick("ZAP_API_KEY"),
-  ZAP_DOM_URL: pick("ZAP_DOM_URL"),
-  ZAP_DOM_API_KEY: pick("ZAP_DOM_API_KEY"),
-  DOM_POLL_MS: Math.max(2000, parseInt(pick("DOM_POLL_MS") || "9000", 10)),
-  CVD_EMA_LEN: Math.max(2, parseInt(pick("CVD_EMA_LEN") || "34", 10)),
-  OFI_EMA_LEN: Math.max(2, parseInt(pick("OFI_EMA_LEN") || "34", 10)),
-  MAX_DOM_AGE_MS: parseInt(pick("MAX_DOM_AGE_MS") || "30000", 10),
-  MAX_CVD_AGE_MS: parseInt(pick("MAX_CVD_AGE_MS") || "30000", 10),
-  COOLDOWN_SEC: parseInt(pick("COOLDOWN_SEC") || "300", 10),
-  IMP_SPREAD_TIGHT_BPS: parseFloat(pick("IMP_SPREAD_TIGHT_BPS") || "1.5"),
-  IMP_SPREAD_WIDE_BPS:  parseFloat(pick("IMP_SPREAD_WIDE_BPS")  || "6"),
-  IMP_VOL_CALM_BPS:     parseFloat(pick("IMP_VOL_CALM_BPS")     || "5"),
-  IMP_VOL_TURB_BPS:     parseFloat(pick("IMP_VOL_TURB_BPS")     || "25"),
-  MAX_AGE_MS: parseInt(pick("MAX_AGE_MS") || "180000", 10),
-  MIN_SCORE: parseInt(pick("MIN_SCORE") || "0", 10),
-  REQUIRE_REGIME_OK: (pick("REQUIRE_REGIME_OK") || "false").toLowerCase() === "true",
-  REQUIRE_REGIME_FOR_SIDEWAYS_ONLY: (pick("REQUIRE_REGIME_FOR_SIDEWAYS_ONLY") || "false").toLowerCase() === "true",
-  MIN_REGIME_CONF: Number.isFinite(parseFloat(pick("MIN_REGIME_CONF"))) ? parseFloat(pick("MIN_REGIME_CONF")) : null,
-  PRUNE_DAYS: Math.max(1, parseInt(pick("PRUNE_DAYS") || "14", 10)),
-  CRONITOR_URL: pick("CRONITOR_URL"),
-};
-
-// 4) Build PG config (uses pick)
+// Build a pg Pool config from env
 function buildPgConfig() {
-  const DATABASE_URL = pick("DATABASE_URL", "POSTGRES_URL", "POSTGRESQL_URL", "INTERNAL_DATABASE_URL");
+  // 1) Prefer a single URL (Render supports postgres:// or postgresql://)
+  const DATABASE_URL = pick(
+    "DATABASE_URL",
+    "POSTGRES_URL",
+    "POSTGRESQL_URL",
+    "INTERNAL_DATABASE_URL"
+  );
   if (DATABASE_URL) {
     return {
       connectionString: DATABASE_URL,
@@ -57,6 +40,7 @@ function buildPgConfig() {
     };
   }
 
+  // 2) Or discrete fields (POSTGRES_* or PG* both fine)
   const host = pick("POSTGRES_HOST", "PGHOST");
   const portStr = pick("POSTGRES_PORT", "PGPORT") || "5432";
   const user = pick("POSTGRES_USER", "PGUSER");
@@ -77,6 +61,7 @@ function buildPgConfig() {
     };
   }
 
+  // last-resort: show what we saw, then fail
   console.error("❌ PG preflight snapshot:", {
     DATABASE_URL: !!DATABASE_URL,
     POSTGRES_URL: !!process.env.POSTGRES_URL,
@@ -88,22 +73,12 @@ function buildPgConfig() {
     POSTGRES_USER: !!process.env.POSTGRES_USER, PGUSER: !!process.env.PGUSER,
     POSTGRES_PASSWORD: !!process.env.POSTGRES_PASSWORD, PGPASSWORD: !!process.env.PGPASSWORD,
   });
+
   throw new Error("❌ No Postgres config. Provide POSTGRES_* fields or DATABASE_URL/POSTGRES_URL.");
 }
 
-// 5) Create one Pool (don’t name it `pg` to avoid confusion with the module)
+// one pool for the app
 const pool = new Pool(buildPgConfig());
-
-// Optional: test the connection immediately
-(async () => {
-  const c = await pool.connect();
-  try {
-    await c.query("select 1");
-    console.log("✅ Postgres connection OK");
-  } finally {
-    c.release();
-  }
-})();
 
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
