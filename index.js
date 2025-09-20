@@ -140,8 +140,6 @@ function buildPgConfig() {
   );
 }
 
-import pkg from "pg";
-const { Pool } = pkg;
 const pg = new Pool(buildPgConfig());
 
 /* -------------------- Schema, indexes, helpers -------------------- */
