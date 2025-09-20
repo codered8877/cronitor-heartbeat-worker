@@ -100,36 +100,45 @@ const ENV = {
   });
 })();
 
-/* ---------------------------- PG CONFIG ---------------------------- */
+// --- PG CONFIG (accept POSTGRES_URL or DATABASE_URL or split vars)
 function buildPgConfig() {
-  const haveFields =
-    ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE && ENV.PGPORT && ENV.PGPASSWORD;
-  if (haveFields) {
-    return {
-      host: ENV.PGHOST,
-      port: ENV.PGPORT,
-      user: ENV.PGUSER,
-      password: ENV.PGPASSWORD,
-      database: ENV.PGDATABASE,
-      ssl: { rejectUnauthorized: false },   // Render PG requires SSL
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    };
-  }
-  if (ENV.DATABASE_URL) {
-    return {
-      connectionString: ENV.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    };
-  }
-  throw new Error("❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL.");
-}
-const pg = new Pool(buildPgConfig());
+  const url =
+    process.env.POSTGRES_URL?.trim() ||
+    process.env.DATABASE_URL?.trim();
 
+  if (url) {
+    return {
+      connectionString: url,
+      ssl: { rejectUnauthorized: false }   // works with Render internal/external
+    };
+  }
+
+  const {
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD
+  } = process.env;
+
+  if (POSTGRES_HOST && POSTGRES_PORT && POSTGRES_DB && POSTGRES_USER && POSTGRES_PASSWORD) {
+    return {
+      host: POSTGRES_HOST.trim(),
+      port: Number(POSTGRES_PORT),
+      database: POSTGRES_DB.trim(),
+      user: POSTGRES_USER.trim(),
+      password: POSTGRES_PASSWORD.trim(),
+      ssl: { rejectUnauthorized: false }
+    };
+  }
+
+  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD.");
+}
+
+// later, when creating the pool:
+import pkg from 'pg';
+const { Pool } = pkg;
+const pg = new Pool(buildPgConfig());
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
   const c = await pg.connect();
