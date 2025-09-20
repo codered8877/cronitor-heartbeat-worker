@@ -91,8 +91,12 @@ function buildPgConfig() {
   throw new Error("❌ No Postgres config. Provide POSTGRES_* fields or DATABASE_URL/POSTGRES_URL.");
 }
 
-// 5) Create one Pool (don’t name it `pg` to avoid confusion with the module)
-const pool = new Pool(buildPgConfig());
+const c = await pool.connect();
+try {
+  // use c.query(...) here
+} finally {
+  c.release();
+}
 
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
