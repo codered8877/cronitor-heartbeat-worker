@@ -315,6 +315,31 @@ async function persistOFI(row) {
   );
 }
 
+async function persistResearchTag(tag) {
+  await pg.query(
+    `insert into research_tags(
+       id, topic, label, dir_hint, confidence, intensity,
+       decay_half_life_min, source, notes, created_by, created_at, raw
+     )
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     on conflict (id) do update set raw = excluded.raw`,
+    [
+      tag.id ?? null,
+      tag.topic ?? null,
+      tag.label ?? null,
+      tag.dir_hint ?? null,
+      Number.isFinite(tag.confidence) ? tag.confidence : null,
+      tag.intensity ?? null,
+      tag.decay_half_life_min ?? null,
+      tag.source ? JSON.stringify(tag.source) : null,
+      tag.notes ?? null,
+      tag.created_by ?? null,
+      tag.created_at ?? new Date().toISOString(),
+      JSON.stringify(tag)
+    ]
+  );
+}
+
 // ---------- A+ validation & cooldown helpers ----------
 function isFiniteNum(n) { return Number.isFinite(+n); }
 
