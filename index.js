@@ -100,39 +100,47 @@ const ENV = {
   });
 })();
 
-// --- PG CONFIG (accept POSTGRES_URL or DATABASE_URL or POSTGRES_* or PG_* )
 function buildPgConfig() {
-  // Prefer a single URL first
-  const url =
-    process.env.POSTGRES_URL?.trim() ||
-    process.env.DATABASE_URL?.trim();
-
-  if (url) {
+  if (
+    ENV.PGHOST &&
+    ENV.PGUSER &&
+    ENV.PGDATABASE &&
+    ENV.PGPORT &&
+    ENV.PGPASSWORD
+  ) {
     return {
-      connectionString: url,
-      ssl: { rejectUnauthorized: false } // works with Render external/internal
+      host: ENV.PGHOST,
+      port: ENV.PGPORT,
+      user: ENV.PGUSER,
+      password: ENV.PGPASSWORD,
+      database: ENV.PGDATABASE,
+      ssl: {
+        rejectUnauthorized: false,
+      }, // Render PG requires SSL
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
     };
   }
 
-  // Fall back to split vars (support both POSTGRES_* and PG_* names)
-  const host     = (process.env.POSTGRES_HOST || process.env.PGHOST)?.trim();
-  const port     = Number(process.env.POSTGRES_PORT || process.env.PGPORT);
-  const database = (process.env.POSTGRES_DB   || process.env.PGDATABASE)?.trim();
-  const user     = (process.env.POSTGRES_USER || process.env.PGUSER)?.trim();
-  const password = (process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD)?.trim();
-
-  if (host && port && database && user && password) {
+  if (ENV.DATABASE_URL) {
     return {
-      host, port, database, user, password,
-      ssl: { rejectUnauthorized: false }
+      connectionString: ENV.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false,
+      }, // works with Render internal/external
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
     };
   }
 
-  throw new Error("No Postgres config. Provide POSTGRES_URL/DATABASE_URL or POSTGRES_HOST/PORT/DB/USER/PASSWORD (or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD).");
+  throw new Error(
+    "❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL."
+  );
 }
 
-// later, when creating the pool:
-import pkg from 'pg';
+import pkg from "pg";
 const { Pool } = pkg;
 const pg = new Pool(buildPgConfig());
 
