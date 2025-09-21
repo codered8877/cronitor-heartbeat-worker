@@ -24,6 +24,16 @@ const ENV = {
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
+  // Database
+  DATABASE_URL:
+    (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
+     process.env.postgres_url || process.env.database_url || ""),
+  POSTGRES_HOST: process.env.POSTGRES_HOST || "",
+  POSTGRES_PORT: process.env.POSTGRES_PORT || "5432",
+  POSTGRES_DB: process.env.POSTGRES_DB || "",
+  POSTGRES_USER: process.env.POSTGRES_USER || "",
+  POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || "",
+  
   // Poll/EMA tuning
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
