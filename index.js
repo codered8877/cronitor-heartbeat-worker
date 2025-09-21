@@ -1388,9 +1388,12 @@ function startPollers() {
   if (IS_WORKER) {
   setInterval(domTick, DOM_POLL_MS);
   console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
+} else {
+  console.log("⏱️  DOM poll disabled (web role)");
 }
 
-  // --- CVD WS + heartbeat (guarded) ---
+  // --- CVD WS + heartbeat (only runs in worker role)
+if (IS_WORKER) {
   startCVD();
 
   cvdTimer = setInterval(async () => {
@@ -1409,8 +1412,10 @@ function startPollers() {
   }, 15_000);
 
   console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
+} else {
+  console.log("📈 CVD disabled (web role)");
 }
-
+  
 /*------------------- CVD via WS + EMA heartbeat ------------------- */
 const CVD_EMA_LEN = ENV.CVD_EMA_LEN;
 const alpha = 2 / (CVD_EMA_LEN + 1);
