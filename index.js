@@ -1462,7 +1462,7 @@ function startCVD() {
   }
   connect();
 }
-startCVD();
+if (IS_WORKER) startCVD();
 
 // -------------------------------
 // Graceful shutdown
