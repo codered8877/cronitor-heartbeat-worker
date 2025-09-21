@@ -75,6 +75,8 @@ const ENV = {
 
 // ─── ROLE switch (web | worker | all) ───────────────────────────────
 const ROLE = (process.env.ROLE || "all").toLowerCase(); // "web" | "worker" | "all"
+const IS_WEB    = ROLE === "web"    || ROLE === "all";
+const IS_WORKER = ROLE === "worker" || ROLE === "all";
 
 // non-secret boot banner
 (function bootBanner() {
@@ -875,10 +877,12 @@ const KEEPALIVE_URL =
     ? `https://${process.env.RENDER_EXTERNAL_URL}/health`
     : `http://127.0.0.1:${ENV.PORT}/health`);
 
-console.log(`[KEEPALIVE] Using ${KEEPALIVE_URL}`);
-setInterval(() => {
-  fetch(KEEPALIVE_URL, { cache: "no-store" }).catch(() => {});
-}, 240000); // every 4 minutes
+if (IS_WEB) {
+  console.log(`[KEEPALIVE] Using ${KEEPALIVE_URL}`);
+  setInterval(() => {
+    fetch(KEEPALIVE_URL, { cache: "no-store" }).catch(() => {});
+  }, 240000);
+}
 
 /* ---------------- TradingView webhook: /aplus ---------------- */
 app.post("/aplus", async (req, res) => {
@@ -1381,8 +1385,10 @@ function startPollers() {
   }
 
   // --- DOM poller (guarded) ---
-  domTimer = setInterval(domTick, DOM_POLL_MS);
+  if (IS_WORKER) {
+  setInterval(domTick, DOM_POLL_MS);
   console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
+}
 
   // --- CVD WS + heartbeat (guarded) ---
   startCVD();
