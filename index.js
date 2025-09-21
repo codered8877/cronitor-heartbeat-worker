@@ -1251,6 +1251,9 @@ const DOM_POLL_MS = ENV.DOM_POLL_MS;
 const PRODUCT_ID  = ENV.PRODUCT_ID;
 const ZAP_DOM_URL = ENV.ZAP_DOM_URL;
 const ZAP_DOM_API_KEY = ENV.ZAP_DOM_API_KEY;
+// --- role-based poller guards ---
+let domTimer = null;
+let cvdTimer = null;
 
 async function fetchDOM() {
   try {
@@ -1371,8 +1374,36 @@ globalThis._persistDOM   = async (row) => persistDOM(row);
 globalThis._persistCVD   = async (row) => persistCVD(row);
 globalThis._persistOFI   = async (row) => persistOFI(row);
 
-setInterval(domTick, DOM_POLL_MS);
-console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
+function startPollers() {
+  if (!(ROLE === "worker" || ROLE === "all")) {
+    console.log(`⏭️  Pollers disabled (role=${ROLE})`);
+    return;
+  }
+
+  // --- DOM poller (guarded) ---
+  domTimer = setInterval(domTick, DOM_POLL_MS);
+  console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
+
+  // --- CVD WS + heartbeat (guarded) ---
+  startCVD();
+
+  cvdTimer = setInterval(async () => {
+    const row = {
+      type: "cvd",
+      ts: new Date().toISOString(),
+      cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
+      cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
+    };
+    try {
+      await globalThis._persistEvent("cvd", row, "ws-heartbeat");
+      await globalThis._persistCVD({ cvd: row.cvd, cvd_ema: row.cvd_ema });
+    } catch (e) {
+      console.warn("CVD persist error:", e.message);
+    }
+  }, 15_000);
+
+  console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
+}
 
 /*------------------- CVD via WS + EMA heartbeat ------------------- */
 const CVD_EMA_LEN = ENV.CVD_EMA_LEN;
@@ -1427,23 +1458,22 @@ function startCVD() {
 }
 startCVD();
 
-// Persist CVD heartbeat every 15s
-setInterval(async () => {
-  const row = {
-    type: "cvd",
-    ts: new Date().toISOString(),
-    cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
-    cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
-  };
-  try {
-    await globalThis._persistEvent("cvd", row, "ws-heartbeat");
-    await globalThis._persistCVD({ cvd: row.cvd, cvd_ema: row.cvd_ema });
-  } catch (e) {
-    console.warn("CVD persist error:", e.message);
-  }
-}, 15_000);
+// -------------------------------
+// Graceful shutdown
+// -------------------------------
+process.on("SIGINT", async () => {
+  console.log("👋 SIGINT received, shutting down...");
+  if (ws) try { ws.close(); } catch {}
+  if (wsHeartbeat) clearInterval(wsHeartbeat);
+  process.exit(0);
+});
 
-console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
+process.on("SIGTERM", async () => {
+  console.log("👋 SIGTERM received, shutting down...");
+  if (ws) try { ws.close(); } catch {}
+  if (wsHeartbeat) clearInterval(wsHeartbeat);
+  process.exit(0);
+});
 
 /* =====================================================================
    ADD-ONS: legacy /dom ingest, admin/test endpoints, simple metrics
