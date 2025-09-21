@@ -1,4 +1,4 @@
-// index.js — APlus pipeline (Part 1/3)
+p// index.js — APlus pipeline (Part 1/3)
 // Node 18+ (global fetch). package.json must include { "type": "module" }.
 
 // index.js (top of file)
@@ -1386,34 +1386,35 @@ function startPollers() {
 
   // --- DOM poller (guarded) ---
   if (IS_WORKER) {
-  setInterval(domTick, DOM_POLL_MS);
-  console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
-} else {
-  console.log("⏱️  DOM poll disabled (web role)");
-}
+    setInterval(domTick, DOM_POLL_MS);
+    console.log(`⏱️  DOM poll @ ${DOM_POLL_MS}ms → ${PRODUCT_ID}`);
+  } else {
+    console.log("⏱️  DOM poll disabled (web role)");
+  }
 
   // --- CVD WS + heartbeat (only runs in worker role)
-if (IS_WORKER) {
-  startCVD();
+  if (IS_WORKER) {
+    startCVD();
 
-  cvdTimer = setInterval(async () => {
-    const row = {
-      type: "cvd",
-      ts: new Date().toISOString(),
-      cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
-      cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
-    };
-    try {
-      await globalThis._persistEvent("cvd", row, "ws-heartbeat");
-      await globalThis._persistCVD({ cvd: row.cvd, cvd_ema: row.cvd_ema });
-    } catch (e) {
-      console.warn("CVD persist error:", e.message);
-    }
-  }, 15_000);
+    cvdTimer = setInterval(async () => {
+      const row = {
+        type: "cvd",
+        ts: new Date().toISOString(),
+        cvd: Number.isFinite(cvd) ? +cvd.toFixed(6) : 0,
+        cvd_ema: Number.isFinite(cvdEma) ? +cvdEma.toFixed(6) : 0,
+      };
+      try {
+        await globalThis._persistEvent("cvd", row, "ws-heartbeat");
+        await globalThis._persistCVD({ cvd: row.cvd, cvd_ema: row.cvd_ema });
+      } catch (e) {
+        console.warn("CVD persist error:", e.message);
+      }
+    }, 15_000);
 
-  console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
-} else {
-  console.log("📈 CVD disabled (web role)");
+    console.log(`📈 CVD EMA len = ${CVD_EMA_LEN}`);
+  } else {
+    console.log("📈 CVD disabled (web role)");
+  }
 }
   
 /*------------------- CVD via WS + EMA heartbeat ------------------- */
