@@ -67,7 +67,9 @@ const ENV = {
   PGDATABASE:  process.env.POSTGRES_DB || process.env.PGDATABASE || "",
   PGUSER:      process.env.POSTGRES_USER || process.env.PGUSER || "",
   PGPASSWORD:  process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "",
-  DATABASE_URL:process.env.POSTGRES_URL || process.env.DATABASE_URL || "",
+  DATABASE_URL:
+  (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
+   process.env.postgres_url || process.env.database_url || ""),
 
   // HTTP
   PORT: parseInt(process.env.PORT || "3000", 10),
