@@ -73,6 +73,9 @@ const ENV = {
   PORT: parseInt(process.env.PORT || "3000", 10),
 };
 
+// ─── ROLE switch (web | worker | all) ───────────────────────────────
+const ROLE = (process.env.ROLE || "all").toLowerCase(); // "web" | "worker" | "all"
+
 // non-secret boot banner
 (function bootBanner() {
   const usingFields = !!(ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE);
@@ -1199,14 +1202,23 @@ app.post("/internal/retention", async (req, res) => {
   }
 });
 
-/* ---------------- Start + graceful shutdown ---------------- */
 let server;
 (async function start() {
   try {
     await dbInit();
-    server = app.listen(ENV.PORT, () => {
-      console.log(`🚀 HTTP listening on :${ENV.PORT}`);
-    });
+
+    if (ROLE === "web" || ROLE === "all") {
+      server = app.listen(ENV.PORT, () => {
+        console.log(`🚀 HTTP listening on :${ENV.PORT} (role=${ROLE})`);
+      });
+    } else {
+      console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
+    }
+
+    if (ROLE === "worker" || ROLE === "all") {
+      console.log(`🔧 Worker role active (role=${ROLE})`);
+      // Pollers (Step 3) will hook in here
+    }
   } catch (e) {
     console.error("❌ boot failure:", e.message);
     process.exit(1);
