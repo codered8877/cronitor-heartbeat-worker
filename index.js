@@ -173,24 +173,39 @@ function buildPgConfig() {
 const pg = new Pool(buildPgConfig());
 
 /* -------------------- Schema, indexes, helpers -------------------- */
-async function dbInit() {
-  const c = await pg.connect();
+let server;
+(async function start() {
   try {
-    const who = await c.query("select current_user, current_database()");
-    console.log("✅ Postgres connected as:", who.rows[0]);
-  } finally { c.release(); }
+    // Debug env vars at boot
+    console.log("----- ENV VARS AT BOOT -----");
+    for (const [k, v] of Object.entries(process.env)) {
+      const K = k.toUpperCase();
+      if (K.includes("POSTGRES") || K.includes("DATABASE_URL")) {
+        const val = K.includes("PASSWORD") || K.includes("URL")
+          ? String(v).replace(/:\/\/.*@/, "://***@")
+          : v;
+        console.log(`${k} = ${val}`);
+      }
+    }
+    console.log("----- END ENV DEBUG -----");
 
-  // Tables
-  await pg.query(`
-    create table if not exists events (
-      id        bigserial primary key,
-      ts        timestamptz not null default now(),
-      kind      text not null,
-      product   text,
-      payload   jsonb,
-      note      text
-    );
-  `);
+    await dbInit();
+
+    if (ROLE === "web" || ROLE === "all") {
+      server = app.listen(ENV.PORT, () => {
+        console.log(`🚀 HTTP listening on :${ENV.PORT} (role=${ROLE})`);
+      });
+    } else {
+      console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
+    }
+
+    // Ensure pollers run when role allows
+    startPollers();
+  } catch (e) {
+    console.error("❌ boot failure:", e.message);
+    process.exit(1);
+  }
+})();
 
   await pg.query(`
     create table if not exists aplus_signals (
