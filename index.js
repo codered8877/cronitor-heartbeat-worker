@@ -131,35 +131,43 @@ const IS_WORKER = ROLE === "worker" || ROLE === "all";
 
 // --- PG CONFIG (ENV-based)
 function buildPgConfig() {
-  const url = ENV.POSTGRES_URL || ENV.DATABASE_URL;
+  const {
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
+    POSTGRES_URL,
+    DATABASE_URL
+  } = process.env;
 
-  // Prefer URL if present
-  if (url) {
+  const effectiveUrl = POSTGRES_URL || DATABASE_URL;
+
+  if (!(POSTGRES_HOST && POSTGRES_PORT && POSTGRES_DB && POSTGRES_USER && POSTGRES_PASSWORD) && !effectiveUrl) {
+    throw new Error("❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL.");
+  }
+
+  if (effectiveUrl) {
     return {
-      connectionString: url,
+      connectionString: effectiveUrl,
       ssl: { rejectUnauthorized: false },
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
+      connectionTimeoutMillis: 10000,
     };
   }
 
-  // Otherwise use discrete fields
-  if (ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE && ENV.PGPASSWORD) {
-    return {
-      host: ENV.PGHOST,
-      port: Number(ENV.PGPORT) || 5432,
-      user: ENV.PGUSER,
-      password: ENV.PGPASSWORD,
-      database: ENV.PGDATABASE,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
-    };
-  }
-
-  throw new Error("❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL.");
+  return {
+    host: POSTGRES_HOST,
+    port: POSTGRES_PORT,
+    database: POSTGRES_DB,
+    user: POSTGRES_USER,
+    password: POSTGRES_PASSWORD,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+  };
 }
 
 const pg = new Pool(buildPgConfig());
