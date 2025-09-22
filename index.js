@@ -36,7 +36,7 @@ const ENV = {
     // Research ingest guard + defaults
   RESEARCH_ENABLED: (process.env.RESEARCH_ENABLED ?? "false").toLowerCase() === "true",
   RESEARCH_TOKEN:   process.env.RESEARCH_TOKEN || "",
-  RESEARCH_TTL_MIN: Math.max(1, parseInt(process.env.RESEARCH_TTL_MIN || "30", 10))
+  RESEARCH_TTL_MIN: Math.max(1, parseInt(process.env.RESEARCH_TTL_MIN || "30", 10)),
 
   // --- Postgres wiring ---
   DATABASE_URL: process.env.DATABASE_URL,
