@@ -1229,6 +1229,27 @@ app.post("/internal/retention", async (req, res) => {
   }
 });
 
+let server;
+(async function start() {
+  try {
+    await dbInit();
+
+    if (ROLE === "web" || ROLE === "all") {
+      server = app.listen(ENV.PORT, () => {
+        console.log(`🚀 HTTP listening on :${ENV.PORT} (role=${ROLE})`);
+      });
+    } else {
+      console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
+    }
+
+    // Ensure pollers run when role allows
+    startPollers();
+  } catch (e) {
+    console.error("❌ boot failure:", e.message);
+    process.exit(1);
+  }
+})();
+
 async function shutdown(sig) {
   try {
     console.log(`\n🔻 ${sig} received. Closing…`);
