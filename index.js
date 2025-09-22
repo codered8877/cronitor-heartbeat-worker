@@ -1489,24 +1489,6 @@ function startCVD() {
   }
   connect();
 }
-if (IS_WORKER) startCVD();
-
-// -------------------------------
-// Graceful shutdown
-// -------------------------------
-process.on("SIGINT", async () => {
-  console.log("👋 SIGINT received, shutting down...");
-  if (ws) try { ws.close(); } catch {}
-  if (wsHeartbeat) clearInterval(wsHeartbeat);
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  console.log("👋 SIGTERM received, shutting down...");
-  if (ws) try { ws.close(); } catch {}
-  if (wsHeartbeat) clearInterval(wsHeartbeat);
-  process.exit(0);
-});
 
 /* =====================================================================
    ADD-ONS: legacy /dom ingest, admin/test endpoints, simple metrics
