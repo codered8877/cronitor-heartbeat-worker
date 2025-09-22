@@ -127,52 +127,46 @@ const IS_WORKER = ROLE === "worker" || ROLE === "all";
   });
 })();
 
-// --- PG CONFIG (accept POSTGRES_* or POSTGRES_URL/DATABASE_URL) ---
+// --- PG CONFIG (ENV-based)
 function buildPgConfig() {
-  const {
-    POSTGRES_HOST,
-    POSTGRES_PORT,
-    POSTGRES_DB,
-    POSTGRES_USER,
-    POSTGRES_PASSWORD,
-    POSTGRES_URL,
-    DATABASE_URL
-  } = process.env;
+  const ENV = process.env;
+  const url = ENV.POSTGRES_URL || ENV.DATABASE_URL;
 
-  const effectiveUrl = POSTGRES_URL || DATABASE_URL;
-
+  // 1) Full field config
   if (
-    !(POSTGRES_HOST && POSTGRES_PORT && POSTGRES_DB && POSTGRES_USER && POSTGRES_PASSWORD) &&
-    !effectiveUrl
+    ENV.PGHOST &&
+    ENV.PGUSER &&
+    ENV.PGDATABASE &&
+    ENV.PGPORT &&
+    ENV.PGPASSWORD
   ) {
-    throw new Error("❌ No Postgres config. Provide POSTGRES_* vars, POSTGRES_URL, or DATABASE_URL.");
-  }
-
-  if (effectiveUrl) {
     return {
-      connectionString: effectiveUrl,
+      host: ENV.PGHOST,
+      port: Number(ENV.PGPORT) || 5432,
+      user: ENV.PGUSER,
+      password: ENV.PGPASSWORD,
+      database: ENV.PGDATABASE,
       ssl: { rejectUnauthorized: false },
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 10000
     };
   }
 
-  return {
-    host: POSTGRES_HOST,
-    port: parseInt(POSTGRES_PORT, 10),
-    user: POSTGRES_USER,
-    password: POSTGRES_PASSWORD,
-    database: POSTGRES_DB,
-    ssl: { rejectUnauthorized: false },
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-  };
-}
+  // 2) URL config (works with either POSTGRES_URL or DATABASE_URL)
+  if (url) {
+    return {
+      connectionString: url,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    };
+  }
 
+  // 3) Nothing found → explicit error
   throw new Error(
-    "❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL."
+    "❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL."
   );
 }
 
