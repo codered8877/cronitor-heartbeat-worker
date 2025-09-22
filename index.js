@@ -993,7 +993,11 @@ await persistEvent(
   { route: "/aplus", gate: "CLEARED", dir: gate.details.dir, cvd_ema: gate.details.cvd_ema },
   "dom-cvd-cleared"
 );
+    // expose CVD EMA on the signal payload for calibration UI/logs
+parsed.meta = { ...(parsed.meta || {}), cvd_ema: gate.details.cvd_ema };
 
+
+    
 /* ---------- 3a) Enrich with OFI + impact sizing ---------- */
 let ofi_ema  = null;
 let spread_bps = null;
