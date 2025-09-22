@@ -15,6 +15,7 @@ console.log("----- END ENV DEBUG -----");
 import express from "express";
 import { Pool } from "pg";
 import zlib from "zlib";
+import crypto from "crypto";
 
 /* ------------------------------- ENV ------------------------------- */
 const ENV = {
@@ -1512,6 +1513,89 @@ app.post("/dom", async (req, res) => {
       }
     }
 
+/* ---------------------- Research tag ingest -----------------------
+   POST /research
+   Body: a single tag object OR { "tags": [ ... ] }
+   Minimal required field: topic
+   Optional: label, dir_hint, confidence, intensity, when_start, when_end,
+             decay_half_life_min, source (json), notes, created_by, id
+------------------------------------------------------------------- */
+function _rtGenId(t) {
+  // Stable-ish id if not provided: topic + when_start
+  const basis = JSON.stringify({
+    topic: (t.topic || "").trim(),
+    label: (t.label || "").trim(),
+    when_start: t.when_start || "",
+  });
+  return "rt_" + crypto.createHash("sha1").update(basis).digest("hex").slice(0, 20);
+}
+
+function _asISO(x) {
+  if (!x) return null;
+  if (typeof x === "number") return new Date(x).toISOString();
+  const d = new Date(x);
+  return Number.isFinite(+d) ? d.toISOString() : null;
+}
+
+app.post("/research", async (req, res) => {
+  try {
+    // Accept JSON or text JSON
+    let body = req.body;
+    if (typeof body === "string") {
+      const s = body.trim();
+      if (s.startsWith("{") && s.endsWith("}")) try { body = JSON.parse(s); } catch {}
+    }
+
+    const list = Array.isArray(body?.tags) ? body.tags
+               : (Array.isArray(body) ? body
+               : body ? [body] : []);
+
+    if (!list.length) {
+      return res.status(400).json({ ok: false, error: "no tags provided" });
+    }
+
+    const results = [];
+    for (const raw of list) {
+      const t = raw || {};
+      if (!t.topic || String(t.topic).trim() === "") {
+        results.push({ ok: false, error: "missing topic", input: t });
+        continue;
+      }
+
+      const tag = {
+        id: t.id || _rtGenId(t),
+        topic: String(t.topic).trim(),
+        label: t.label ? String(t.label).trim() : null,
+        dir_hint: t.dir_hint ? String(t.dir_hint).trim() : null,      // e.g. "bullish" | "bearish" | "sideways"
+        confidence: Number.isFinite(+t.confidence) ? +t.confidence : null, // 0..1 or 0..100 (your choice)
+        intensity: t.intensity || null,                                // e.g. "low|med|high"
+        when_start: _asISO(t.when_start),
+        when_end: _asISO(t.when_end),
+        decay_half_life_min: Number.isFinite(+t.decay_half_life_min) ? +t.decay_half_life_min : null,
+        source: t.source || null,                                      // any JSON
+        notes: t.notes || null,
+        created_by: t.created_by || "manual",
+        created_at: _asISO(t.created_at) || new Date().toISOString(),
+        raw: t
+      };
+
+      try {
+        await persistResearchTag(tag);
+        results.push({ ok: true, id: tag.id, topic: tag.topic });
+      } catch (e) {
+        results.push({ ok: false, id: tag.id, topic: tag.topic, error: e.message });
+      }
+    }
+
+    const ok = results.every(r => r.ok);
+    res.status(ok ? 200 : 207).json({ ok, results, count: results.length });
+  } catch (e) {
+    console.error("❌ /research error:", e.message);
+    await persistEvent("audit", { err: e.message }, "research-handler-error");
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+  
     let raw = req.body, parsed = null;
     if (typeof raw === "string") {
       const s = raw.trim();
