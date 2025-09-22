@@ -173,39 +173,24 @@ function buildPgConfig() {
 const pg = new Pool(buildPgConfig());
 
 /* -------------------- Schema, indexes, helpers -------------------- */
-let server;
-(async function start() {
+async function dbInit() {
+  const c = await pg.connect();
   try {
-    // Debug env vars at boot
-    console.log("----- ENV VARS AT BOOT -----");
-    for (const [k, v] of Object.entries(process.env)) {
-      const K = k.toUpperCase();
-      if (K.includes("POSTGRES") || K.includes("DATABASE_URL")) {
-        const val = K.includes("PASSWORD") || K.includes("URL")
-          ? String(v).replace(/:\/\/.*@/, "://***@")
-          : v;
-        console.log(`${k} = ${val}`);
-      }
-    }
-    console.log("----- END ENV DEBUG -----");
+    const who = await c.query("select current_user, current_database()");
+    console.log("✅ Postgres connected as:", who.rows[0]);
+  } finally { c.release(); }
 
-    await dbInit();
-
-    if (ROLE === "web" || ROLE === "all") {
-      server = app.listen(ENV.PORT, () => {
-        console.log(`🚀 HTTP listening on :${ENV.PORT} (role=${ROLE})`);
-      });
-    } else {
-      console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
-    }
-
-    // Ensure pollers run when role allows
-    startPollers();
-  } catch (e) {
-    console.error("❌ boot failure:", e.message);
-    process.exit(1);
-  }
-})();
+  // Core tables
+  await pg.query(`
+    create table if not exists events (
+      id        bigserial primary key,
+      ts        timestamptz not null default now(),
+      kind      text not null,
+      product   text,
+      payload   jsonb,
+      note      text
+    );
+  `);
 
   await pg.query(`
     create table if not exists aplus_signals (
@@ -221,40 +206,36 @@ let server;
       reasons     text
     );
   `);
-  
-   await pg.query(`
+
+  /* ---- research_tags (your new JSON-source version) ---- */
+  await pg.query(`
     create table if not exists research_tags (
-      id           text primary key,
-      created_at   timestamptz not null default now(),
-      created_by   text,
-      topic        text not null,
-      label        text,
-      dir_hint     text,
-      confidence   double precision,
-      intensity    text,
-      when_start   timestamptz,
-      when_end     timestamptz,
-      decay_half_life_min int,
-      source       jsonb,          -- replaced source_name/source_url with JSON blob
-      notes        text,
-      checksum     text,
-      raw          jsonb           -- was body
+      id                   text primary key,
+      created_at           timestamptz not null default now(),
+      created_by           text,
+      topic                text not null,
+      label                text,
+      dir_hint             text,
+      confidence           double precision,
+      intensity            text,
+      when_start           timestamptz,
+      when_end             timestamptz,
+      decay_half_life_min  int,
+      source               jsonb,
+      notes                text,
+      checksum             text,
+      raw                  jsonb
     );
   `);
 
-  // Helpful indexes (idempotent)
-  await pg.query(`create index if not exists idx_research_topic  on research_tags(topic)`);
-  await pg.query(`create index if not exists idx_research_window on research_tags(when_start, when_end)`);
-  await pg.query(`create index if not exists idx_research_created on research_tags(created_at desc)`);
-  
   // Extend aplus_signals with regime fields (idempotent)
   await pg.query(`
     alter table if exists aplus_signals
       add column if not exists regime text,
       add column if not exists regime_conf double precision
   `);
-  await pg.query(`create index if not exists idx_aplus_regime on aplus_signals(regime)`);
 
+  // Market microstructure tables
   await pg.query(`
     create table if not exists dom_snapshots (
       id          bigserial primary key,
@@ -278,7 +259,6 @@ let server;
     );
   `);
 
-  /* -------------------- OFI (order-flow imbalance) -------------------- */
   await pg.query(`
     create table if not exists ofi_ticks (
       id          bigserial primary key,
@@ -288,15 +268,14 @@ let server;
       ofi_ema     double precision
     );
   `);
-  
-  // --- Trade feedback
+
+  // Trade feedback
   await pg.query(`
     create table if not exists trade_feedback (
       id bigserial primary key,
       ts timestamptz not null default now()
     );
   `);
-
   await pg.query(`
     alter table if exists trade_feedback
       add column if not exists signal_id bigint,
@@ -305,20 +284,25 @@ let server;
       add column if not exists notes     text
   `);
 
-  await pg.query(`create index if not exists idx_feedback_ts     on trade_feedback(ts desc)`);
-  await pg.query(`create index if not exists idx_feedback_signal on trade_feedback(signal_id)`);
-  
-  // Indexes
+  // Indexes (idempotent)
   await pg.query(`create index if not exists idx_events_ts      on events(ts desc)`);
   await pg.query(`create index if not exists idx_events_kind    on events(kind)`);
   await pg.query(`create index if not exists idx_events_product on events(product)`);
+
   await pg.query(`create index if not exists idx_aplus_ts       on aplus_signals(ts desc)`);
+  await pg.query(`create index if not exists idx_aplus_regime   on aplus_signals(regime)`);
+
   await pg.query(`create index if not exists idx_dom_ts         on dom_snapshots(ts desc)`);
   await pg.query(`create index if not exists idx_cvd_ts         on cvd_ticks(ts desc)`);
   await pg.query(`create index if not exists idx_ofi_ts         on ofi_ticks(ts desc)`);
-  
+
+  await pg.query(`create index if not exists idx_research_topic  on research_tags(topic)`);
+  await pg.query(`create index if not exists idx_research_window on research_tags(when_start, when_end)`);
+  await pg.query(`create index if not exists idx_research_created on research_tags(created_at desc)`);
+
   console.log("📦 DB schema ready.");
 }
+
 async function persistEvent(kind, payload, note = null) {
   await pg.query(
     `insert into events(kind, product, payload, note) values ($1,$2,$3,$4)`,
@@ -1244,27 +1228,6 @@ app.post("/internal/retention", async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-
-let server;
-(async function start() {
-  try {
-    await dbInit();
-
-    if (ROLE === "web" || ROLE === "all") {
-      server = app.listen(ENV.PORT, () => {
-        console.log(`🚀 HTTP listening on :${ENV.PORT} (role=${ROLE})`);
-      });
-    } else {
-      console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
-    }
-
-    // Ensure pollers run when role allows
-    startPollers();
-  } catch (e) {
-    console.error("❌ boot failure:", e.message);
-    process.exit(1);
-  }
-})();
 
 async function shutdown(sig) {
   try {
