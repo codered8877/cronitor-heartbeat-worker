@@ -33,6 +33,11 @@ const ENV = {
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
+    // Research ingest guard + defaults
+  RESEARCH_ENABLED: (process.env.RESEARCH_ENABLED ?? "false").toLowerCase() === "true",
+  RESEARCH_TOKEN:   process.env.RESEARCH_TOKEN || "",
+  RESEARCH_TTL_MIN: Math.max(1, parseInt(process.env.RESEARCH_TTL_MIN || "30", 10))
+
   // --- Postgres wiring ---
   DATABASE_URL: process.env.DATABASE_URL,
   POSTGRES_URL: process.env.POSTGRES_URL,
