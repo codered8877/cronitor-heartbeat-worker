@@ -127,21 +127,30 @@ const IS_WORKER = ROLE === "worker" || ROLE === "all";
   });
 })();
 
-// --- PG CONFIG (ENV-based; this is the original working one)
+// --- PG CONFIG (accept POSTGRES_* or POSTGRES_URL/DATABASE_URL) ---
 function buildPgConfig() {
+  const {
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
+    POSTGRES_URL,
+    DATABASE_URL
+  } = process.env;
+
+  const effectiveUrl = POSTGRES_URL || DATABASE_URL;
+
   if (
-    ENV.PGHOST &&
-    ENV.PGUSER &&
-    ENV.PGDATABASE &&
-    ENV.PGPORT &&
-    ENV.PGPASSWORD
+    !(POSTGRES_HOST && POSTGRES_PORT && POSTGRES_DB && POSTGRES_USER && POSTGRES_PASSWORD) &&
+    !effectiveUrl
   ) {
+    throw new Error("❌ No Postgres config. Provide POSTGRES_* vars, POSTGRES_URL, or DATABASE_URL.");
+  }
+
+  if (effectiveUrl) {
     return {
-      host: ENV.PGHOST,
-      port: ENV.PGPORT,
-      user: ENV.PGUSER,
-      password: ENV.PGPASSWORD,
-      database: ENV.PGDATABASE,
+      connectionString: effectiveUrl,
       ssl: { rejectUnauthorized: false },
       max: 10,
       idleTimeoutMillis: 30000,
@@ -149,15 +158,18 @@ function buildPgConfig() {
     };
   }
 
-  if (ENV.DATABASE_URL) {
-    return {
-      connectionString: ENV.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    };
-  }
+  return {
+    host: POSTGRES_HOST,
+    port: parseInt(POSTGRES_PORT, 10),
+    user: POSTGRES_USER,
+    password: POSTGRES_PASSWORD,
+    database: POSTGRES_DB,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+  };
+}
 
   throw new Error(
     "❌ No Postgres config. Provide POSTGRES_HOST/PORT/DB/USER/PASSWORD or POSTGRES_URL."
