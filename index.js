@@ -207,25 +207,23 @@ async function dbInit() {
     );
   `);
   
- /* -------------------- RESEARCH TAGS -------------------- */
-  await pg.query(`
+   await pg.query(`
     create table if not exists research_tags (
-      id           text primary key,                -- your tag.id
+      id           text primary key,
       created_at   timestamptz not null default now(),
-      created_by   text,                            -- "research" / "manual" / etc
-      topic        text not null,                   -- e.g. "macro/fomc"
+      created_by   text,
+      topic        text not null,
       label        text,
-      dir_hint     text,                            -- "bull" | "bear" | "sideways" | "none"
-      confidence   double precision,                -- 0..1
-      intensity    text,                            -- "low" | "med" | "high"
-      when_start   timestamptz,                     -- ISO in tag.when.start
-      when_end     timestamptz,                     -- ISO in tag.when.end
+      dir_hint     text,
+      confidence   double precision,
+      intensity    text,
+      when_start   timestamptz,
+      when_end     timestamptz,
       decay_half_life_min int,
-      source_name  text,
-      source_url   text,
+      source       jsonb,          -- replaced source_name/source_url with JSON blob
       notes        text,
       checksum     text,
-      body         jsonb                            -- full raw tag
+      raw          jsonb           -- was body
     );
   `);
 
@@ -1245,10 +1243,8 @@ let server;
       console.log(`🚫 Skipping HTTP server (role=${ROLE})`);
     }
 
-    if (ROLE === "worker" || ROLE === "all") {
-      console.log(`🔧 Worker role active (role=${ROLE})`);
-      // Pollers (Step 3) will hook in here
-    }
+    // Ensure pollers run when role allows
+    startPollers();
   } catch (e) {
     console.error("❌ boot failure:", e.message);
     process.exit(1);
