@@ -1517,6 +1517,35 @@ app.post("/dom", async (req, res) => {
       }
     }
 
+    // Accept JSON text or object
+    let raw = req.body, parsed = null;
+    if (typeof raw === "string") {
+      const s = raw.trim();
+      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
+    } else if (raw && typeof raw === "object") parsed = raw;
+
+    const dom = parsed || {};
+    const row = {
+      type: "dom",
+      ts: dom.ts || new Date().toISOString(),
+      p_bid: Number.isFinite(+dom.p_bid) ? +dom.p_bid : null,
+      q_bid: Number.isFinite(+dom.q_bid) ? +dom.q_bid : null,
+      p_ask: Number.isFinite(+dom.p_ask) ? +dom.p_ask : null,
+      q_ask: Number.isFinite(+dom.q_ask) ? +dom.q_ask : null,
+      sequence: Number.isFinite(+dom.sequence) ? +dom.sequence : null,
+    };
+
+    await persistEvent("dom", row, "external");
+    await persistDOM(row);
+
+    return res.json({ ok: true, stored: row });
+  } catch (e) {
+    console.error("❌ /dom error:", e.message);
+    await persistEvent("audit", { err: e.message }, "dom-handler-error");
+    return res.status(500).json({ error: "server_error" });
+  }
+});
+
 /* ---------------------- Research ingest (dual-mode) -----------------
    POST /research
 
@@ -1603,7 +1632,7 @@ app.post("/research", async (req, res) => {
       return res.json({ ok: true, mode: "pulse", stored: true });
     }
 
-    /* -------- Mode A: tags/batch (Step 1 behavior) -------- */
+    /* -------- Mode A: tags/batch -------- */
     const list = Array.isArray(body?.tags) ? body.tags
                : (Array.isArray(body) ? body
                : body ? [body] : []);
@@ -1652,7 +1681,6 @@ app.post("/research", async (req, res) => {
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
-
 
 /* ---------------------- A+ test injector ----------------------------
    Create a synthetic compact A+ payload so you can verify end-to-end:
