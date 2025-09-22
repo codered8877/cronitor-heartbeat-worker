@@ -13,27 +13,26 @@ const ENV = {
   // Core product (Coinbase product id)
   PRODUCT_ID: process.env.PRODUCT_ID || "BTC-USD",
 
-  // TradingView webhook guard (optional). If set, we require header x-tv-key.
+  // TradingView webhook guard (optional)
   TV_API_KEY: process.env.TV_API_KEY || "",
 
   // Optional relay of compact A+ signals to Zapier
   ZAP_B_URL:   process.env.ZAP_B_URL || "",
   ZAP_API_KEY: process.env.ZAP_API_KEY || "",
 
-  // Optional fan-out of DOM snapshots to an external endpoint
+  // Optional fan-out of DOM snapshots
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
-  // Database
-  DATABASE_URL:
-    (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
-     process.env.postgres_url || process.env.database_url || ""),
-  POSTGRES_HOST: process.env.POSTGRES_HOST || "",
-  POSTGRES_PORT: process.env.POSTGRES_PORT || "5432",
-  POSTGRES_DB: process.env.POSTGRES_DB || "",
-  POSTGRES_USER: process.env.POSTGRES_USER || "",
-  POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || "",
-  
+  // ── Postgres (prefer discrete fields; fallback to URL) ────────────
+  PGHOST:      process.env.POSTGRES_HOST || process.env.PGHOST || "",
+  PGPORT:      parseInt(process.env.POSTGRES_PORT || process.env.PGPORT || "5432", 10),
+  PGDATABASE:  process.env.POSTGRES_DB   || process.env.PGDATABASE || "",
+  PGUSER:      process.env.POSTGRES_USER || process.env.PGUSER || "",
+  PGPASSWORD:  process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "",
+  DATABASE_URL: (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
+                 process.env.postgres_url || process.env.database_url || ""),
+
   // Poll/EMA tuning
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
@@ -60,7 +59,8 @@ const ENV = {
 
   // Regime gating flags
   REQUIRE_REGIME_OK: (process.env.REQUIRE_REGIME_OK ?? "false").toLowerCase() === "true",
-  REQUIRE_REGIME_FOR_SIDEWAYS_ONLY: (process.env.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY ?? "false").toLowerCase() === "true",
+  REQUIRE_REGIME_FOR_SIDEWAYS_ONLY:
+    (process.env.REQUIRE_REGIME_FOR_SIDEWAYS_ONLY ?? "false").toLowerCase() === "true",
   MIN_REGIME_CONF: Number.isFinite(parseFloat(process.env.MIN_REGIME_CONF))
     ? parseFloat(process.env.MIN_REGIME_CONF)
     : null,
@@ -71,19 +71,19 @@ const ENV = {
   // Optional heartbeat
   CRONITOR_URL: process.env.CRONITOR_URL || "",
 
-  // Postgres (prefer discrete fields; fallback to URL)
-  PGHOST:      process.env.POSTGRES_HOST || process.env.PGHOST || "",
-  PGPORT:      parseInt(process.env.POSTGRES_PORT || process.env.PGPORT || "5432", 10),
-  PGDATABASE:  process.env.POSTGRES_DB || process.env.PGDATABASE || "",
-  PGUSER:      process.env.POSTGRES_USER || process.env.PGUSER || "",
-  PGPASSWORD:  process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "",
-  DATABASE_URL:
-  (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
-   process.env.postgres_url || process.env.database_url || ""),
-
   // HTTP
   PORT: parseInt(process.env.PORT || "3000", 10),
 };
+
+// --- Debug: show how DB will be resolved (masked) ---
+console.log("🔎 PG fields present?",
+  { host: !!ENV.PGHOST, db: !!ENV.PGDATABASE, user: !!ENV.PGUSER, port: ENV.PGPORT, pwd: !!ENV.PGPASSWORD });
+console.log(
+  "🔎 Effective DB URL:",
+  ENV.DATABASE_URL
+    ? (ENV.DATABASE_URL.replace(/:\/\/.*@/, "://***@")).slice(0, 80) + "..."
+    : "none"
+);
 
 // ─── ROLE switch (web | worker | all) ───────────────────────────────
 const ROLE = (process.env.ROLE || "all").toLowerCase(); // "web" | "worker" | "all"
