@@ -1513,15 +1513,25 @@ app.post("/dom", async (req, res) => {
       }
     }
 
-/* ---------------------- Research tag ingest -----------------------
+/* ---------------------- Research ingest (dual-mode) -----------------
    POST /research
-   Body: a single tag object OR { "tags": [ ... ] }
-   Minimal required field: topic
-   Optional: label, dir_hint, confidence, intensity, when_start, when_end,
-             decay_half_life_min, source (json), notes, created_by, id
+
+   Mode A (tags/batch):
+     - Body: a single tag object OR { "tags": [ ... ] }
+     - Writes to research_tags (idempotent), logs to events.
+
+   Mode B (pulse/minimal):
+     - Body: { ts_ms, tag, source }
+       - ts_ms: number (ms epoch) | string ISO
+       - tag:   string OR object (freeform)
+       - source: any JSON
+     - Stores a compact row in events (kind="research"), and if tag is an
+       object with a "topic" field, also writes a minimal research_tags row
+       with when_start = ts_ms.
 ------------------------------------------------------------------- */
+
+// Helpers (crypto already imported at top of file)
 function _rtGenId(t) {
-  // Stable-ish id if not provided: topic + when_start
   const basis = JSON.stringify({
     topic: (t.topic || "").trim(),
     label: (t.label || "").trim(),
@@ -1529,7 +1539,6 @@ function _rtGenId(t) {
   });
   return "rt_" + crypto.createHash("sha1").update(basis).digest("hex").slice(0, 20);
 }
-
 function _asISO(x) {
   if (!x) return null;
   if (typeof x === "number") return new Date(x).toISOString();
@@ -1543,13 +1552,57 @@ app.post("/research", async (req, res) => {
     let body = req.body;
     if (typeof body === "string") {
       const s = body.trim();
-      if (s.startsWith("{") && s.endsWith("}")) try { body = JSON.parse(s); } catch {}
+      if (s.startsWith("{") && s.endsWith("}")) { try { body = JSON.parse(s); } catch {} }
     }
 
+    /* -------- Mode B: pulse/minimal { ts_ms, tag, source } -------- */
+    const looksLikePulse =
+      body && typeof body === "object" &&
+      (Object.prototype.hasOwnProperty.call(body, "ts_ms") ||
+       Object.prototype.hasOwnProperty.call(body, "tag"));
+
+    if (looksLikePulse) {
+      const tsISO = _asISO(body.ts_ms) || new Date().toISOString();
+      const pulse = {
+        ts: tsISO,
+        tag: body.tag ?? null,     // string or object
+        source: body.source ?? null
+      };
+
+      // Persist compact research event (for calibration/backtest)
+      await persistEvent("research", pulse, "pulse");
+
+      // If tag is an object with a topic, also upsert a minimal research_tag
+      if (pulse.tag && typeof pulse.tag === "object" && pulse.tag.topic) {
+        const t = pulse.tag;
+        const tag = {
+          id: t.id || _rtGenId({ topic: t.topic, label: t.label, when_start: tsISO }),
+          topic: String(t.topic).trim(),
+          label: t.label ? String(t.label).trim() : null,
+          dir_hint: t.dir_hint ? String(t.dir_hint).trim() : null,
+          confidence: Number.isFinite(+t.confidence) ? +t.confidence : null,
+          intensity: t.intensity || null,
+          when_start: tsISO,
+          when_end: _asISO(t.when_end),
+          decay_half_life_min: Number.isFinite(+t.decay_half_life_min) ? +t.decay_half_life_min : null,
+          source: body.source ?? t.source ?? null,
+          notes: t.notes ?? null,
+          created_by: t.created_by || "pulse",
+          created_at: new Date().toISOString(),
+          raw: t
+        };
+        await persistResearchTag(tag);
+        return res.json({ ok: true, mode: "pulse+tag", id: tag.id });
+      }
+
+      // If tag is just a string (or no structured topic), we only log to events
+      return res.json({ ok: true, mode: "pulse", stored: true });
+    }
+
+    /* -------- Mode A: tags/batch (Step 1 behavior) -------- */
     const list = Array.isArray(body?.tags) ? body.tags
                : (Array.isArray(body) ? body
                : body ? [body] : []);
-
     if (!list.length) {
       return res.status(400).json({ ok: false, error: "no tags provided" });
     }
@@ -1566,13 +1619,13 @@ app.post("/research", async (req, res) => {
         id: t.id || _rtGenId(t),
         topic: String(t.topic).trim(),
         label: t.label ? String(t.label).trim() : null,
-        dir_hint: t.dir_hint ? String(t.dir_hint).trim() : null,      // e.g. "bullish" | "bearish" | "sideways"
-        confidence: Number.isFinite(+t.confidence) ? +t.confidence : null, // 0..1 or 0..100 (your choice)
-        intensity: t.intensity || null,                                // e.g. "low|med|high"
+        dir_hint: t.dir_hint ? String(t.dir_hint).trim() : null,
+        confidence: Number.isFinite(+t.confidence) ? +t.confidence : null,
+        intensity: t.intensity || null,
         when_start: _asISO(t.when_start),
         when_end: _asISO(t.when_end),
         decay_half_life_min: Number.isFinite(+t.decay_half_life_min) ? +t.decay_half_life_min : null,
-        source: t.source || null,                                      // any JSON
+        source: t.source || null,
         notes: t.notes || null,
         created_by: t.created_by || "manual",
         created_at: _asISO(t.created_at) || new Date().toISOString(),
@@ -1588,39 +1641,11 @@ app.post("/research", async (req, res) => {
     }
 
     const ok = results.every(r => r.ok);
-    res.status(ok ? 200 : 207).json({ ok, results, count: results.length });
+    res.status(ok ? 200 : 207).json({ ok, results, count: results.length, mode: "tags" });
   } catch (e) {
     console.error("❌ /research error:", e.message);
     await persistEvent("audit", { err: e.message }, "research-handler-error");
     res.status(500).json({ ok: false, error: "server_error" });
-  }
-});
-  
-    let raw = req.body, parsed = null;
-    if (typeof raw === "string") {
-      const s = raw.trim();
-      if (s.startsWith("{") && s.endsWith("}")) { try { parsed = JSON.parse(s); } catch {} }
-    } else if (raw && typeof raw === "object") parsed = raw;
-
-    const dom = parsed || {};
-    const row = {
-      type: "dom",
-      ts: dom.ts || new Date().toISOString(),
-      p_bid: Number.isFinite(+dom.p_bid) ? +dom.p_bid : null,
-      q_bid: Number.isFinite(+dom.q_bid) ? +dom.q_bid : null,
-      p_ask: Number.isFinite(+dom.p_ask) ? +dom.p_ask : null,
-      q_ask: Number.isFinite(+dom.q_ask) ? +dom.q_ask : null,
-      sequence: Number.isFinite(+dom.sequence) ? +dom.sequence : null,
-    };
-
-    await persistEvent("dom", row, "external");
-    await persistDOM(row);
-
-    return res.json({ ok: true, stored: row });
-  } catch (e) {
-    console.error("❌ /dom error:", e.message);
-    await persistEvent("audit", { err: e.message }, "dom-handler-error");
-    return res.status(500).json({ error: "server_error" });
   }
 });
 
