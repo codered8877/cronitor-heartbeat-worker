@@ -1,3 +1,11 @@
+console.log("----- ENV VARS AT BOOT -----");
+for (const [k, v] of Object.entries(process.env)) {
+  if (k.toUpperCase().includes("POSTGRES") || k.toUpperCase().includes("DATABASE_URL")) {
+    console.log(`${k} = ${v}`);
+  }
+}
+console.log("----- END ENV DEBUG -----");
+
 // index.js — APlus pipeline (Part 1/3)
 // Node 18+ (global fetch). package.json must include { "type": "module" }.
 
