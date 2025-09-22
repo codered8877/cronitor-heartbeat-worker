@@ -33,22 +33,22 @@ const ENV = {
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
-    // Research ingest guard + defaults
+  // Research ingest guard + defaults
   RESEARCH_ENABLED: (process.env.RESEARCH_ENABLED ?? "false").toLowerCase() === "true",
   RESEARCH_TOKEN:   process.env.RESEARCH_TOKEN || "",
   RESEARCH_TTL_MIN: Math.max(1, parseInt(process.env.RESEARCH_TTL_MIN || "30", 10)),
 
   // --- Postgres wiring ---
-  DATABASE_URL: process.env.DATABASE_URL,
-  POSTGRES_URL: process.env.POSTGRES_URL,
+  DATABASE_URL:  process.env.DATABASE_URL || "",
+  POSTGRES_URL:  process.env.POSTGRES_URL || "",
 
   // allow either POSTGRES_* or PG* names to feed the same fields
-  PGHOST: process.env.POSTGRES_HOST || process.env.PGHOST,
-  PGPORT: process.env.POSTGRES_PORT || process.env.PGPORT,
-  PGDATABASE: process.env.POSTGRES_DB || process.env.PGDATABASE,
-  PGUSER: process.env.POSTGRES_USER || process.env.PGUSER,
+  PGHOST:     process.env.POSTGRES_HOST || process.env.PGHOST,
+  PGPORT:     process.env.POSTGRES_PORT || process.env.PGPORT,
+  PGDATABASE: process.env.POSTGRES_DB   || process.env.PGDATABASE,
+  PGUSER:     process.env.POSTGRES_USER || process.env.PGUSER,
   PGPASSWORD: process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD,
-  
+
   // Poll/EMA tuning
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
