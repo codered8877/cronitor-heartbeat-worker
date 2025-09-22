@@ -32,15 +32,17 @@ const ENV = {
   ZAP_DOM_URL:     process.env.ZAP_DOM_URL || "",
   ZAP_DOM_API_KEY: process.env.ZAP_DOM_API_KEY || "",
 
-  // ── Postgres (prefer discrete fields; fallback to URL) ────────────
-  PGHOST:      process.env.POSTGRES_HOST || process.env.PGHOST || "",
-  PGPORT:      parseInt(process.env.POSTGRES_PORT || process.env.PGPORT || "5432", 10),
-  PGDATABASE:  process.env.POSTGRES_DB   || process.env.PGDATABASE || "",
-  PGUSER:      process.env.POSTGRES_USER || process.env.PGUSER || "",
-  PGPASSWORD:  process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || "",
-  DATABASE_URL: (process.env.POSTGRES_URL || process.env.DATABASE_URL ||
-                 process.env.postgres_url || process.env.database_url || ""),
+  // --- Postgres wiring ---
+  DATABASE_URL: process.env.DATABASE_URL,
+  POSTGRES_URL: process.env.POSTGRES_URL,
 
+  // allow either POSTGRES_* or PG* names to feed the same fields
+  PGHOST: process.env.POSTGRES_HOST || process.env.PGHOST,
+  PGPORT: process.env.POSTGRES_PORT || process.env.PGPORT,
+  PGDATABASE: process.env.POSTGRES_DB || process.env.PGDATABASE,
+  PGUSER: process.env.POSTGRES_USER || process.env.PGUSER,
+  PGPASSWORD: process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD,
+  
   // Poll/EMA tuning
   DOM_POLL_MS: Math.max(2000, parseInt(process.env.DOM_POLL_MS || "9000", 10)),
   CVD_EMA_LEN: Math.max(2, parseInt(process.env.CVD_EMA_LEN || "34", 10)),
@@ -129,17 +131,21 @@ const IS_WORKER = ROLE === "worker" || ROLE === "all";
 
 // --- PG CONFIG (ENV-based)
 function buildPgConfig() {
-  const ENV = process.env;
   const url = ENV.POSTGRES_URL || ENV.DATABASE_URL;
 
-  // 1) Full field config
-  if (
-    ENV.PGHOST &&
-    ENV.PGUSER &&
-    ENV.PGDATABASE &&
-    ENV.PGPORT &&
-    ENV.PGPASSWORD
-  ) {
+  // Prefer URL if present
+  if (url) {
+    return {
+      connectionString: url,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    };
+  }
+
+  // Otherwise use discrete fields
+  if (ENV.PGHOST && ENV.PGUSER && ENV.PGDATABASE && ENV.PGPASSWORD) {
     return {
       host: ENV.PGHOST,
       port: Number(ENV.PGPORT) || 5432,
@@ -153,21 +159,7 @@ function buildPgConfig() {
     };
   }
 
-  // 2) URL config (works with either POSTGRES_URL or DATABASE_URL)
-  if (url) {
-    return {
-      connectionString: url,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
-    };
-  }
-
-  // 3) Nothing found → explicit error
-  throw new Error(
-    "❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL."
-  );
+  throw new Error("❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL.");
 }
 
 const pg = new Pool(buildPgConfig());
