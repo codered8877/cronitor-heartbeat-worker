@@ -1882,8 +1882,13 @@ app.get("/metrics/simple", async (_req, res) => {
 /* -------------------------- Env inspector ---------------------------
    GET /env (sanitized) – for debugging only. Hides secrets.
 --------------------------------------------------------------------- */
-app.get("/env", (_req, res) => {
+app.get("/env", (req, res) => {
   try {
+    // 🔒 Require the retention token to view env
+    const tok = req.get("X-Auth-Token") || req.query.token;
+    if (RETENTION_TOKEN && tok !== RETENTION_TOKEN) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
     const hide = (v) => (v ? "***" : "");
     res.json({
       ok: true,
