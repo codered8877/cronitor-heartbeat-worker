@@ -1584,36 +1584,25 @@ function _asISO(x) {
   return Number.isFinite(+d) ? d.toISOString() : null;
 }
 
-// ---------------- Research Guard Endpoint ----------------
+// ---------------------- Research ingest (dual-mode, guarded) -----------------
 app.post("/research", async (req, res) => {
   try {
-    // 🔒 Guard: require explicit enable flag + token
-    if (ENV.RESEARCH_ENABLED !== "true") {
-      return res.status(403).json({ error: "Research disabled" });
+    // 🔒 Guard
+    if (!ENV.RESEARCH_ENABLED) {
+      return res.status(403).json({ ok: false, error: "research_disabled" });
     }
-
-    const tok = req.get("X-Research-Token");
+    const tok = req.get("X-Research-Token") || req.query.token;
     if (!tok || tok !== ENV.RESEARCH_TOKEN) {
-      await persistEvent("audit", { kind: "unauthorized_research" });
-      return res.status(401).json({ error: "Unauthorized" });
+      await persistEvent("audit", { route: "/research", reason: "unauthorized" }, "research-guard-fail");
+      return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
     // Accept JSON or text JSON
     let body = req.body;
     if (typeof body === "string") {
       const s = body.trim();
-      if (s.startsWith("{") && s.endsWith("}")) {
-        body = JSON.parse(s);
-      }
+      if (s.startsWith("{") && s.endsWith("}")) { try { body = JSON.parse(s); } catch {} }
     }
-
-    await persistEvent("research", body);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Research endpoint error", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
 
     /* -------- Mode B: pulse/minimal { ts_ms, tag, source } -------- */
     const looksLikePulse =
@@ -1625,14 +1614,12 @@ app.post("/research", async (req, res) => {
       const tsISO = _asISO(body.ts_ms) || new Date().toISOString();
       const pulse = {
         ts: tsISO,
-        tag: body.tag ?? null,     // string or object
+        tag: body.tag ?? null,
         source: body.source ?? null
       };
 
-      // Persist compact research event (for calibration/backtest)
       await persistEvent("research", pulse, "pulse");
 
-      // If tag is an object with a topic, also upsert a minimal research_tag
       if (pulse.tag && typeof pulse.tag === "object" && pulse.tag.topic) {
         const t = pulse.tag;
         const tag = {
@@ -1654,8 +1641,6 @@ app.post("/research", async (req, res) => {
         await persistResearchTag(tag);
         return res.json({ ok: true, mode: "pulse+tag", id: tag.id });
       }
-
-      // If tag is just a string (or no structured topic), we only log to events
       return res.json({ ok: true, mode: "pulse", stored: true });
     }
 
@@ -1674,7 +1659,6 @@ app.post("/research", async (req, res) => {
         results.push({ ok: false, error: "missing topic", input: t });
         continue;
       }
-
       const tag = {
         id: t.id || _rtGenId(t),
         topic: String(t.topic).trim(),
@@ -1691,7 +1675,6 @@ app.post("/research", async (req, res) => {
         created_at: _asISO(t.created_at) || new Date().toISOString(),
         raw: t
       };
-
       try {
         await persistResearchTag(tag);
         results.push({ ok: true, id: tag.id, topic: tag.topic });
