@@ -70,6 +70,16 @@ services:
       - key: PRUNE_DAYS
         value: "14"
 
+      # ---- RETENTION WINDOWS ----
+      - key: RETENTION_DOM_DAYS
+        value: "14"
+      - key: RETENTION_CVD_DAYS
+        value: "14"
+      - key: RETENTION_OFI_DAYS
+        value: "14"
+      - key: RETENTION_APLUS_DAYS
+        value: "180"
+
       # ---- IMPACT SIZING ----
       - key: IMP_SPREAD_TIGHT_BPS
         value: "1.5"
