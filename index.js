@@ -1584,14 +1584,36 @@ function _asISO(x) {
   return Number.isFinite(+d) ? d.toISOString() : null;
 }
 
+// ---------------- Research Guard Endpoint ----------------
 app.post("/research", async (req, res) => {
   try {
+    // 🔒 Guard: require explicit enable flag + token
+    if (ENV.RESEARCH_ENABLED !== "true") {
+      return res.status(403).json({ error: "Research disabled" });
+    }
+
+    const tok = req.get("X-Research-Token");
+    if (!tok || tok !== ENV.RESEARCH_TOKEN) {
+      await persistEvent("audit", { kind: "unauthorized_research" });
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
     // Accept JSON or text JSON
     let body = req.body;
     if (typeof body === "string") {
       const s = body.trim();
-      if (s.startsWith("{") && s.endsWith("}")) { try { body = JSON.parse(s); } catch {} }
+      if (s.startsWith("{") && s.endsWith("}")) {
+        body = JSON.parse(s);
+      }
     }
+
+    await persistEvent("research", body);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Research endpoint error", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
     /* -------- Mode B: pulse/minimal { ts_ms, tag, source } -------- */
     const looksLikePulse =
