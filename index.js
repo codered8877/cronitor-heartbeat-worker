@@ -87,6 +87,11 @@ const ENV = {
   // Optional heartbeat
   CRONITOR_URL: process.env.CRONITOR_URL || "",
 
+  // --- OpenAI → Discord relay ---
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || "",
+  RELAY_OPENAI: (process.env.RELAY_OPENAI ?? "true").toLowerCase() === "true",
+  
   // HTTP
   PORT: parseInt(process.env.PORT || "3000", 10),
 };
@@ -506,6 +511,71 @@ function normalizeToProductId(symRaw, productId = ENV.PRODUCT_ID) {
 
   // default to product id
   return want;
+}
+
+/* ---------- OpenAI → Discord relay helpers ---------- */
+const AI = ENV.OPENAI_API_KEY ? new OpenAI({ apiKey: ENV.OPENAI_API_KEY }) : null;
+
+function _compactFromParsed(p) {
+  // Only fields the Pine payload actually sets
+  return {
+    symbol: p?.s ?? null,
+    timeframe: p?.f ?? null,
+    direction: p?.d ?? null,
+    eventType: p?.e ?? "APlus",
+    price: Number.isFinite(+p?.p) ? +p.p : null,
+    sl: Number.isFinite(+p?.sl) ? +p.sl : null,
+    tp1: Number.isFinite(+p?.tp1) ? +p.tp1 : null,
+    tp2: Number.isFinite(+p?.tp2) ? +p.tp2 : null,
+    tp3: Number.isFinite(+p?.tp3) ? +p.tp3 : null,
+    score: Number.isFinite(+p?.sc) ? +p.sc : null,
+    core: Number.isFinite(+p?.co) ? +p.co : null,
+    quality: Number.isFinite(+p?.qu) ? +p.qu : null,
+    ts: p?.t ?? null
+  };
+}
+
+async function relayOpenAIToDiscord(parsed) {
+  if (!AI || !ENV.DISCORD_WEBHOOK_URL) return;
+
+  const input = _compactFromParsed(parsed);
+
+  // Ask OpenAI to format a clean Discord line
+  let text;
+  try {
+    const resp = await AI.responses.create({
+      model: "gpt-4o",
+      instructions:
+        "You are a formatter. Return a concise Discord message for a trading alert. " +
+        "Single header line + compact details block. No emojis except LONG(🟢) or SHORT(🔴). " +
+        "No extra commentary. Omit null fields. Use 4 sig figs where sensible.",
+      input: [{ role: "user", content: [{ type: "text", text: JSON.stringify(input) }] }]
+    });
+    text = (resp.output_text || "").trim();
+  } catch (e) {
+    console.warn("[relay] OpenAI error:", e.message);
+  }
+
+  if (!text) {
+    // Safe fallback
+    const d = (parsed?.d || "").toUpperCase();
+    text = `A+ ${d} ${parsed?.s ?? ""} ${parsed?.f ?? ""} @ ${parsed?.p ?? ""}`.trim();
+  }
+
+  // Post to Discord webhook
+  try {
+    const r = await fetch(ENV.DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: text })
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      console.warn("[relay] Discord non-200:", r.status, t.slice(0, 200));
+    }
+  } catch (e) {
+    console.warn("[relay] Discord error:", e.message);
+  }
 }
 
 /* ---------- DOM/CVD gate helper (place above /aplus) ---------- */
@@ -1114,6 +1184,13 @@ if (ENV.REQUIRE_REGIME_OK) {
 // ---- 4) Persist A+ signal, then optional Zapier relay
 await persistAPlus(parsed);
 
+// Fire-and-forget so we ACK TradingView quickly
+if (ENV.RELAY_OPENAI && ENV.OPENAI_API_KEY && ENV.DISCORD_WEBHOOK_URL) {
+  relayOpenAIToDiscord(parsed).catch(e =>
+    console.warn("[relay] background error:", e.message)
+  );
+}
+    
 /* ---------- Optional Zapier forward ---------- */
 if (ENV.ZAP_B_URL) {
   try {
