@@ -17,6 +17,7 @@ import { Pool } from "pg";
 import zlib from "zlib";
 import crypto from "crypto";
 import WebSocket from "ws";
+import OpenAI from "openai";
 
 /* ------------------------------- ENV ------------------------------- */
 const ENV = {
