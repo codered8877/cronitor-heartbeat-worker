@@ -16,6 +16,7 @@ import express from "express";
 import { Pool } from "pg";
 import zlib from "zlib";
 import crypto from "crypto";
+import WebSocket from "ws";
 
 /* ------------------------------- ENV ------------------------------- */
 const ENV = {
