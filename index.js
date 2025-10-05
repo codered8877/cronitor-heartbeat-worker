@@ -1356,9 +1356,6 @@ async function shutdown(sig) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT",  () => shutdown("SIGINT"));
 
-// index.js — APlus pipeline (Part 3/3)
-import WebSocket from "ws";
-
 /* ---------------------- DOM POLLER (REST) ---------------------- */
 const DOM_POLL_MS = ENV.DOM_POLL_MS;
 const PRODUCT_ID  = ENV.PRODUCT_ID;
