@@ -103,15 +103,41 @@ services:
         value: "3000"
 
 cronJobs:
+  # 1️⃣ Health ping — every 5 minutes
+  - name: aplus-health-ping
+    schedule: "*/5 * * * *"
+    httpMethod: GET
+    url: "https://cronitor-heartbeat-worker.onrender.com/health"
+
+  # 2️⃣ Retention cleanup — daily 05:00 UTC
   - name: aplus-nightly-prune
     schedule: "0 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/retention?token=$RETENTION_TOKEN"
+    url: "https://cronitor-heartbeat-worker.onrender.com/retention?token=7c13f3aa50db4f3b82afc8a68d29c987"
     headers:
       - key: X-Auth-Token
-        value: "$RETENTION_TOKEN"
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
 
-  - name: aplus-backup
+  # 3️⃣ Backup small — gzip dump under 30s
+  - name: aplus-backup-small
     schedule: "15 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/backup?token=$BACKUP_TOKEN"
+    url: "https://cronitor-heartbeat-worker.onrender.com/backup?token=7c13f3aa50db4f3b82afc8a68d29c987&days=1"
+    headers:
+      - key: X-Auth-Token
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+
+  # 4️⃣ Backup check — integrity snapshot
+  - name: aplus-backup-check
+    schedule: "20 5 * * *"
+    httpMethod: GET
+    url: "https://cronitor-heartbeat-worker.onrender.com/backup/check?token=7c13f3aa50db4f3b82afc8a68d29c987"
+    headers:
+      - key: X-Auth-Token
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+
+  # 5️⃣ Integrity self-check — deep pipeline test
+  - name: aplus-integrity-selfcheck
+    schedule: "25 5 * * *"
+    httpMethod: GET
+    url: "https://cronitor-heartbeat-worker.onrender.com/internal/integrity"
