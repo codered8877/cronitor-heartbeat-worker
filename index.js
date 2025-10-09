@@ -161,10 +161,15 @@ function buildPgConfig() {
     throw new Error("❌ No Postgres config. Provide PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD or POSTGRES_URL/DATABASE_URL.");
   }
 
+  // ✅ Auto SSL only for external hosts
+  const isInternal = effectiveUrl && /\.internal(?::\d+)?\//.test(effectiveUrl);
+  const wantsDisable = effectiveUrl && /sslmode=(disable|allow)/i.test(effectiveUrl);
+  const sslSetting = (isInternal || wantsDisable) ? false : { rejectUnauthorized: false };
+
   if (effectiveUrl) {
     return {
       connectionString: effectiveUrl,
-      ssl: { rejectUnauthorized: false },
+      ssl: sslSetting,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
@@ -177,13 +182,14 @@ function buildPgConfig() {
     database: POSTGRES_DB,
     user: POSTGRES_USER,
     password: POSTGRES_PASSWORD,
-    ssl: { rejectUnauthorized: false },
+    ssl: false,                      // fields mode is almost always internal on Render
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
   };
 }
 
+// ⬇️ keep this line exactly as-is (it already exists right after the function)
 const pg = new Pool({ ...buildPgConfig(), keepAlive: true });
 pg.on("error", (e) => console.error("[pg] pool error:", e.stack || e));
 
