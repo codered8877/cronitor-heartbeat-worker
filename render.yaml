@@ -19,7 +19,7 @@ services:
         value: "BTC-USD"
 
       # ---- PUBLIC base URL ----
--     - key: PUBLIC_BASE_URL
+      - key: PUBLIC_BASE_URL
         value: "https://aplus-pipeline.onrender.com"
 
       # ---- SECURITY TOKENS ----
