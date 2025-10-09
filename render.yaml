@@ -47,8 +47,6 @@ services:
         value: "45000"
       - key: MAX_CVD_AGE_MS
         value: "75000"
-      - key: PORT
-        value: "10000"
 
 # ==============================
 # CRON JOBS (all <30s)
