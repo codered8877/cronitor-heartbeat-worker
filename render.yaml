@@ -4,7 +4,7 @@ services:
     env: node
     plan: starter
     runtime: node
-    region: virginia            # ← east for lower latency
+    region: virginia
     buildCommand: "npm ci"
     startCommand: "node index.js"
     autoDeploy: true
@@ -30,7 +30,7 @@ services:
 
       # ---- PUBLIC base URL for cron convenience ----
       - key: PUBLIC_BASE_URL
-        value: "https://aplus-pipeline.onrender.com"   # <-- replace with your actual Render URL after first deploy
+        value: "https://aplus-pipeline.onrender.com"
 
       # ---- SECURITY TOKENS ----
       - key: TV_API_KEY
@@ -96,48 +96,51 @@ services:
       - key: REQUIRE_REGIME_FOR_SIDEWAYS_ONLY
         value: "false"
       - key: MIN_REGIME_CONF
-        value: ""                 # e.g., "0.5"
+        value: ""
 
-      # ---- PORT (Render sets this; keep for local) ----
+      # ---- PORT ----
       - key: PORT
         value: "3000"
 
+# ==============================
+# CRON JOBS (all under 30s)
+# ==============================
 cronJobs:
-  # 1️⃣ Health ping — every 5 minutes
-  - name: aplus-health-ping
+  # 1️⃣ Health ping (every 5 minutes)
+  - name: aplus-health
     schedule: "*/5 * * * *"
     httpMethod: GET
-    url: "https://cronitor-heartbeat-worker.onrender.com/health"
+    url: "$PUBLIC_BASE_URL/health"
 
-  # 2️⃣ Retention cleanup — daily 05:00 UTC
+  # 2️⃣ Retention cleanup
   - name: aplus-nightly-prune
     schedule: "0 5 * * *"
     httpMethod: GET
-    url: "https://cronitor-heartbeat-worker.onrender.com/retention?token=7c13f3aa50db4f3b82afc8a68d29c987"
+    url: "$PUBLIC_BASE_URL/retention?token=$RETENTION_TOKEN"
     headers:
       - key: X-Auth-Token
-        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+        value: "$RETENTION_TOKEN"
 
-  # 3️⃣ Backup small — gzip dump under 30s
-  - name: aplus-backup-small
+  # 3️⃣ Backup (small, <30s gzip)
+  - name: aplus-backup
     schedule: "15 5 * * *"
     httpMethod: GET
-    url: "https://cronitor-heartbeat-worker.onrender.com/backup?token=7c13f3aa50db4f3b82afc8a68d29c987&days=1"
+    url: "$PUBLIC_BASE_URL/backup?token=$BACKUP_TOKEN&days=1"
     headers:
       - key: X-Auth-Token
-        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+        value: "$BACKUP_TOKEN"
 
-  # 4️⃣ Backup check — integrity snapshot
+  # 4️⃣ Backup check (verify last backup)
   - name: aplus-backup-check
     schedule: "20 5 * * *"
     httpMethod: GET
-    url: "https://cronitor-heartbeat-worker.onrender.com/backup/check?token=7c13f3aa50db4f3b82afc8a68d29c987"
+    url: "$PUBLIC_BASE_URL/backup/check?token=$BACKUP_TOKEN"
     headers:
       - key: X-Auth-Token
-        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+        value: "$BACKUP_TOKEN"
 
-  # 5️⃣ Integrity self-check — deep pipeline test
-  - name: aplus-integrity-selfcheck
+  # 5️⃣ Integrity check (full internal self-test)
+  - name: aplus-integrity
     schedule: "25 5 * * *"
     httpMethod: GET
-    url: "https://cronitor-heartbeat-worker.onrender.com/internal/integrity"
+    url: "$PUBLIC_BASE_URL/internal/integrity"
