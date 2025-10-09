@@ -12,7 +12,7 @@ services:
     envVars:
       # ---- REQUIRED (single DB config) ----
       - key: DATABASE_URL
-        value: "postgresql://btc_logger:pAgX7BuJRM4RYQl3Kq3wBjWwGggXhsOs@dpg-d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs?sslmode=require"
+        value: "postgresql://aplus_db_user:OMwStCXc633HXIskmPiVlaT4fRO84pp2@aplus-db.onrender.com:5432/aplus_db?ssl=true"
 
       # ---- REQUIRED (app-level) ----
       - key: PRODUCT_ID
