@@ -12,15 +12,15 @@ services:
     envVars:
       # ---- REQUIRED (single DB config) ----
       - key: DATABASE_URL
-        value: "postgresql://btc_logger:pAgX7BuJRM4RYQ13Kq3wBiWwGGgXbeOsadng_d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs"
+        value: "postgresql://btc_logger:pAgX7BuJRM4RYQ13Kq3wBjWwGggXhsOs@dpg-d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs?ssl=true"
 
       # ---- REQUIRED (app-level) ----
       - key: PRODUCT_ID
         value: "BTC-USD"
 
       # ---- PUBLIC base URL ----
-      - key: PUBLIC_BASE_URL
-        value: "https://cronitor-heartbeat-worker.onrender.com"
+-     - key: PUBLIC_BASE_URL
+        value: "https://aplus-pipeline.onrender.com"
 
       # ---- SECURITY TOKENS ----
       - key: ADMIN_TOKEN
