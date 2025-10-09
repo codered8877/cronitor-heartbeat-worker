@@ -1,7 +1,8 @@
+// (Very top of file, before anything else is fine)
 console.log("----- ENV VARS AT BOOT -----");
 for (const [k, v] of Object.entries(process.env)) {
-  if (k.toUpperCase().includes("POSTGRES") || k.toUpperCase().includes("DATABASE_URL")) {
-    console.log(`${k} = ${v}`);
+  if (/POSTGRES|DATABASE_URL/i.test(k)) {
+    console.log(`${k} = ${(v || "").replace(/:\/\/.*@/, "://***@")}`);
   }
 }
 console.log("----- END ENV DEBUG -----");
@@ -183,7 +184,8 @@ function buildPgConfig() {
   };
 }
 
-const pg = new Pool(buildPgConfig());
+const pg = new Pool({ ...buildPgConfig(), keepAlive: true });
+pg.on("error", (e) => console.error("[pg] pool error:", e.stack || e));
 
 /* -------------------- Schema, indexes, helpers -------------------- */
 async function dbInit() {
