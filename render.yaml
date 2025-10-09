@@ -13,16 +13,6 @@ services:
       # ---- REQUIRED (pick one of the DB configs) ----
       - key: DATABASE_URL
         sync: false
-      - key: POSTGRES_HOST
-        sync: false
-      - key: POSTGRES_PORT
-        value: "5432"
-      - key: POSTGRES_DB
-        sync: false
-      - key: POSTGRES_USER
-        sync: false
-      - key: POSTGRES_PASSWORD
-        sync: false
 
       # ---- REQUIRED (app-level) ----
       - key: PRODUCT_ID
