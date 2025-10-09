@@ -12,7 +12,7 @@ services:
     envVars:
       # ---- REQUIRED (single DB config) ----
       - key: DATABASE_URL
-        value: "postgresql://btc_logger:pAgX7BuJRM4RYQl3Kq3wBjWwGggXhsOs@dpg-d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs?ssl=true"
+        value: "postgresql://btc_logger:pAgX7BuJRM4RYQl3Kq3wBjWwGggXhsOs@dpg-d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs?sslmode=require"
 
       # ---- REQUIRED (app-level) ----
       - key: PRODUCT_ID
@@ -38,6 +38,10 @@ services:
       - key: CRONITOR_URL
         value: "https://cronitor.link/p/73e27affa70a46329181849e9d89e253/DwcCTj"
 
+      # Optional
+      - key: ROLE
+        value: "all"
+
       # ---- PERFORMANCE / TIMING ----
       - key: DOM_POLL_MS
         value: "9000"
@@ -47,8 +51,6 @@ services:
         value: "45000"
       - key: MAX_CVD_AGE_MS
         value: "75000"
-      - key: PORT
-        value: "10000"
 
 # ==============================
 # CRON JOBS (all <30s)
