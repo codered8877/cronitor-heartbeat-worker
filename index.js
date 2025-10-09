@@ -834,7 +834,7 @@ app.get("/perf/by_regime", async (req, res) => {
 });
 console.log("🧮 Regime perf route enabled: GET /perf/by_regime");
 
-/* ------------------------- RETENTION (GET) ------------------------ */
+// ------------------------- RETENTION (GET) ------------------------
 // token via header `X-Auth-Token` or query `?token=...`
 const RETENTION_TOKEN = process.env.RETENTION_TOKEN || "";
 
@@ -845,49 +845,58 @@ app.get("/retention", async (req, res) => {
   }
 
   const tables = [
-  { name: "aplus_signals", windowed: true,  ts: "ts" },
-  { name: "events",        windowed: true,  ts: "ts" },
-  { name: "dom_snapshots", windowed: true,  ts: "ts" },
-  { name: "cvd_ticks",     windowed: true,  ts: "ts" },
-  { name: "ofi_ticks",     windowed: true,  ts: "ts" },   // ← add this line
-  { name: "trade_feedback",windowed: false, ts: "ts" },
-];
+    { name: "aplus_signals", windowed: true,  ts: "ts" },
+    { name: "events",        windowed: true,  ts: "ts" },
+    { name: "dom_snapshots", windowed: true,  ts: "ts" },
+    { name: "cvd_ticks",     windowed: true,  ts: "ts" },
+    { name: "ofi_ticks",     windowed: true,  ts: "ts" },
+    { name: "trade_feedback",windowed: false, ts: "ts" },
+  ];
   const vacuums = ["aplus_signals", "events", "dom_snapshots", "cvd_ticks", "ofi_ticks", "trade_feedback"];
 
   const result = { ok: true, deleted: {}, skipped: [], vacuumed: [] };
-  const client = await pg.connect();
 
+  // --- Phase 1: deletes inside a transaction ---
+  const client = await pg.connect();
   async function safeDelete(t, interval) {
     const exists = await client.query("select to_regclass($1) reg", [t]);
     if (!exists.rows[0].reg) { result.skipped.push(t); return; }
     const r = await client.query(`delete from ${t} where ts < now() - interval '${interval}'`);
     result.deleted[t] = r.rowCount;
   }
-  async function safeVacuum(t) {
-    const exists = await client.query("select to_regclass($1) reg", [t]);
-    if (!exists.rows[0].reg) return;
-    await client.query(`vacuum analyze ${t}`);
-    result.vacuumed.push(t);
-  }
 
   try {
     await client.query("begin");
-
     const plan = tables
       .filter(t => t.windowed)
       .map(t => ({ table: t.name, interval: `${ENV.PRUNE_DAYS} days` }));
-
-    for (const { table, interval } of plan) await safeDelete(table, interval);
-    for (const t of vacuums) await safeVacuum(t);
+    for (const { table, interval } of plan) {
+      await safeDelete(table, interval);
+    }
     await client.query("commit");
-    console.log("[RETENTION] done:", result);
-    res.json(result);
   } catch (err) {
     await client.query("rollback");
-    console.error("[RETENTION] error:", err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error("[RETENTION] delete phase error:", err);
+    client.release();
+    return res.status(500).json({ ok: false, error: err.message });
   } finally {
     client.release();
+  }
+
+  // --- Phase 2: VACUUM *after* commit, outside any tx ---
+  try {
+    for (const t of vacuums) {
+      const { rows } = await pg.query("select to_regclass($1) reg", [t]);
+      if (!rows[0].reg) continue;
+      await pg.query(`vacuum analyze ${t}`);     // autocommit; not inside BEGIN/COMMIT
+      result.vacuumed.push(t);
+    }
+    console.log("[RETENTION] done:", result);
+    return res.json(result);
+  } catch (err) {
+    console.error("[RETENTION] vacuum phase error:", err);
+    // still return what we did; caller mainly cares that deletes succeeded
+    return res.status(207).json({ ...result, ok: false, vacuum_error: err.message });
   }
 });
 
