@@ -10,127 +10,85 @@ services:
     autoDeploy: true
     healthCheckPath: /health
     envVars:
-      # ---- REQUIRED (pick one of the DB configs) ----
+      # ---- REQUIRED (single DB config) ----
       - key: DATABASE_URL
-        sync: false
+        value: "postgresql://btc_logger:pAgX7BuJRM4RYQ13Kq3wBiWwGGgXbeOsadng_d300nsvdiees738rlnog-a.virginia-postgres.render.com:5432/btc_scalp_logs"
 
       # ---- REQUIRED (app-level) ----
       - key: PRODUCT_ID
         value: "BTC-USD"
 
-      # ---- PUBLIC base URL for cron convenience ----
+      # ---- PUBLIC base URL ----
       - key: PUBLIC_BASE_URL
-        value: "https://aplus-pipeline.onrender.com"
+        value: "https://cronitor-heartbeat-worker.onrender.com"
 
       # ---- SECURITY TOKENS ----
-      - key: TV_API_KEY
-        sync: false
-      - key: RETENTION_TOKEN
-        sync: false
+      - key: ADMIN_TOKEN
+        value: "a57f1b8d9c4e4f62b2c1e983e94d3a7f"
       - key: BACKUP_TOKEN
-        sync: false
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
+      - key: RETENTION_TOKEN
+        value: "3ff82c4e1b944d2bb99b9b7c56a8e123"
+      - key: TV_API_KEY
+        value: ""
       - key: ZAP_API_KEY
-        sync: false
-
-      # ---- OPTIONAL INTEGRATIONS ----
+        value: ""
       - key: ZAP_B_URL
-        sync: false
-      - key: ZAP_DOM_URL
-        sync: false
-      - key: ZAP_DOM_API_KEY
-        sync: false
+        value: "https://hooks.zapier.com/hooks/catch/24548615/um2ks46/"
       - key: CRONITOR_URL
-        sync: false
+        value: "https://cronitor.link/p/73e27affa70a46329181849e9d89e253/DwcCTj"
 
-      # ---- TUNING ----
+      # ---- PERFORMANCE / TIMING ----
       - key: DOM_POLL_MS
         value: "9000"
       - key: CVD_EMA_LEN
         value: "34"
-      - key: OFI_EMA_LEN
-        value: "34"
       - key: MAX_DOM_AGE_MS
-        value: "30000"
+        value: "45000"
       - key: MAX_CVD_AGE_MS
-        value: "30000"
-      - key: MAX_AGE_MS
-        value: "180000"
-      - key: COOLDOWN_SEC
-        value: "300"
-      - key: PRUNE_DAYS
-        value: "14"
-
-      # ---- RETENTION WINDOWS ----
-      - key: RETENTION_DOM_DAYS
-        value: "14"
-      - key: RETENTION_CVD_DAYS
-        value: "14"
-      - key: RETENTION_OFI_DAYS
-        value: "14"
-      - key: RETENTION_APLUS_DAYS
-        value: "180"
-
-      # ---- IMPACT SIZING ----
-      - key: IMP_SPREAD_TIGHT_BPS
-        value: "1.5"
-      - key: IMP_SPREAD_WIDE_BPS
-        value: "6"
-      - key: IMP_VOL_CALM_BPS
-        value: "5"
-      - key: IMP_VOL_TURB_BPS
-        value: "25"
-
-      # ---- REGIME ENFORCEMENT (optional) ----
-      - key: REQUIRE_REGIME_OK
-        value: "false"
-      - key: REQUIRE_REGIME_FOR_SIDEWAYS_ONLY
-        value: "false"
-      - key: MIN_REGIME_CONF
-        value: ""
-
-      # ---- PORT ----
+        value: "75000"
       - key: PORT
-        value: "3000"
+        value: "10000"
 
 # ==============================
-# CRON JOBS (all under 30s)
+# CRON JOBS (all <30s)
 # ==============================
 cronJobs:
-  # 1️⃣ Health ping (every 5 minutes)
+  # 1️⃣ Health ping (every 5 min)
   - name: aplus-health
     schedule: "*/5 * * * *"
     httpMethod: GET
     url: "$PUBLIC_BASE_URL/health"
 
-  # 2️⃣ Retention cleanup
+  # 2️⃣ Retention cleanup (nightly)
   - name: aplus-nightly-prune
     schedule: "0 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/retention?token=$RETENTION_TOKEN"
+    url: "$PUBLIC_BASE_URL/retention?token=3ff82c4e1b944d2bb99b9b7c56a8e123"
     headers:
       - key: X-Auth-Token
-        value: "$RETENTION_TOKEN"
+        value: "3ff82c4e1b944d2bb99b9b7c56a8e123"
 
-  # 3️⃣ Backup (small, <30s gzip)
+  # 3️⃣ Backup (nightly gzip)
   - name: aplus-backup
     schedule: "15 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/backup?token=$BACKUP_TOKEN&days=1"
+    url: "$PUBLIC_BASE_URL/backup?token=7c13f3aa50db4f3b82afc8a68d29c987&days=1"
     headers:
       - key: X-Auth-Token
-        value: "$BACKUP_TOKEN"
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
 
-  # 4️⃣ Backup check (verify last backup)
+  # 4️⃣ Backup check (verify backup)
   - name: aplus-backup-check
     schedule: "20 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/backup/check?token=$BACKUP_TOKEN"
+    url: "$PUBLIC_BASE_URL/backup/check?token=7c13f3aa50db4f3b82afc8a68d29c987"
     headers:
       - key: X-Auth-Token
-        value: "$BACKUP_TOKEN"
+        value: "7c13f3aa50db4f3b82afc8a68d29c987"
 
-  # 5️⃣ Integrity check (full internal self-test)
+  # 5️⃣ Integrity snapshot (env self-test)
   - name: aplus-integrity
     schedule: "25 5 * * *"
     httpMethod: GET
-    url: "$PUBLIC_BASE_URL/internal/integrity"
+    url: "$PUBLIC_BASE_URL/env?token=3ff82c4e1b944d2bb99b9b7c56a8e123"
